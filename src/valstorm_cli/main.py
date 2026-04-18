@@ -137,6 +137,14 @@ def init(
             
     target_path.mkdir(parents=True, exist_ok=True)
     
+    # 0. Git Init
+    try:
+        import subprocess
+        subprocess.run(["git", "init"], cwd=target_path, capture_output=True)
+        console.print("[green]✓[/green] Git repository initialized.")
+    except Exception as e:
+        console.print(f"[yellow]![/yellow] Warning: Failed to initialize git repository: {e}")
+
     # 1. Configuration
     auth = ValstormAuth(profile=profile, env=env)
     
@@ -145,15 +153,14 @@ def init(
         "profile": auth.profile
     }
     
-    # Ensure .valstorm directory exists for internal state
-    (target_path / ".valstorm").mkdir(exist_ok=True)
-    
     with open(target_path / "valstorm.json", "w") as f:
         json.dump(config, f, indent=4)
     
     # 2. Create Directory Structure
-    (target_path / "triggers").mkdir(exist_ok=True)
-    (target_path / "functions").mkdir(exist_ok=True)
+    object_dir = target_path / "object"
+    (object_dir / "record_trigger").mkdir(parents=True, exist_ok=True)
+    (object_dir / "function").mkdir(parents=True, exist_ok=True)
+    
     platform_dir = target_path / "valstorm_platform"
     platform_dir.mkdir(exist_ok=True)
     
@@ -175,8 +182,12 @@ def init(
     with open(target_path / "README.md", "w") as f:
         f.write(f"# Valstorm Project: {target_path.name}\n\nLocal development environment for Valstorm triggers and functions.\n")
 
+    # 5. Create a .gitignore
+    with open(target_path / ".gitignore", "w") as f:
+        f.write("__pycache__/\n*.pyc\n.env\n*.json\n")
+
     console.print(f"\n[bold green]🚀 Project initialized successfully in {target_path.absolute()}[/bold green]")
-    console.print(f"Next steps:\n  1. [cyan]cd {target_path.name}[/cyan]\n  2. [cyan]valstorm pull[/cyan]\n  3. Start coding in [blue]triggers/[/blue] or [blue]functions/[/blue]")
+    console.print(f"Next steps:\n  1. [cyan]cd {target_path.name}[/cyan]\n  2. [cyan]valstorm pull[/cyan]\n  3. Start coding in [blue]object/record_trigger/[/blue] or [blue]object/function/[/blue]")
 
 def get_project_root() -> Path:
     """Helper to find the valstorm.json file by searching upwards."""
@@ -233,16 +244,14 @@ def pull(
                 console.print(f"[yellow]No records found for {file_type}.[/yellow]")
                 continue
 
-            # Save metadata to hidden folder
-            meta_dir = root / ".valstorm"
-            meta_dir.mkdir(exist_ok=True)
-            with open(meta_dir / f"{file_type}_metadata.json", "w") as f:
+            target_dir = root / "object" / file_type
+            target_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save metadata alongside the code
+            with open(target_dir / f"{file_type}_metadata.json", "w") as f:
                 json.dump(records, f, indent=4)
 
             # Extract code
-            target_dir = root / ("triggers" if file_type == "record_trigger" else "functions")
-            target_dir.mkdir(exist_ok=True)
-            
             count = 0
             for record in records:
                 file_name = record.get("file_name")
@@ -286,58 +295,99 @@ def push(
         console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
         raise typer.Exit(1)
 
-    types = {"record_trigger": "triggers", "function": "functions"}
+    types = ["record_trigger", "function"]
     
-    for file_type, folder in types.items():
-        metadata_path = root / ".valstorm" / f"{file_type}_metadata.json"
-        if not metadata_path.exists():
-            console.print(f"[yellow]No metadata found for {file_type}. Pull first?[/yellow]")
-            continue
-            
-        with open(metadata_path, "r") as f:
-            metadata = json.load(f)
+    for file_type in types:
+        local_dir = root / "object" / file_type
+        metadata_path = local_dir / f"{file_type}_metadata.json"
+        
+        metadata = []
+        if metadata_path.exists():
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
             
         updates_payload = []
-        local_dir = root / folder
+        creates_payload = []
         
-        for record in metadata:
-            file_name = record.get("file_name")
-            if not file_name: continue
+        if not local_dir.exists():
+            continue
+
+        # Map current metadata for easy lookup
+        meta_map = {r.get("file_name"): r for r in metadata if r.get("file_name")}
+        
+        # Scan local directory for changes and new files
+        for file_path in local_dir.glob("*.py"):
+            file_name = file_path.name
+            with open(file_path, "r") as f:
+                local_code = f.read()
             
-            file_path = local_dir / file_name
-            if file_path.exists():
-                with open(file_path, "r") as f:
-                    local_code = f.read()
-                
+            if file_name in meta_map:
+                # This is an existing file, check for updates
+                record = meta_map[file_name]
                 if local_code != record.get("code"):
                     updates_payload.append({
                         "id": record["id"],
                         "code": local_code,
                         "app": record.get("app")
                     })
+            else:
+                # This is a NEW file, we need to create it in the cloud
+                console.print(f"Detected new local {file_type}: [cyan]{file_name}[/cyan]")
+                if typer.confirm(f"Do you want to create {file_name} in the cloud?"):
+                    name = typer.prompt(f"Display name for this {file_type}", default=file_name.replace(".py", "").replace("_", " ").title())
+                    app_id = typer.prompt("App ID (The UUID of the Valstorm App this belongs to)")
+                    
+                    new_record = {
+                        "name": name,
+                        "file_name": file_name,
+                        "code": local_code,
+                        "app": app_id,
+                        "active": True
+                    }
+                    
+                    if file_type == "record_trigger":
+                        new_record["object_api_name"] = typer.prompt("Object API Name (e.g., contact, lead)")
+                        new_record["trigger_type"] = typer.prompt("Trigger Type (before_upsert, after_upsert, etc)", default="after_upsert")
+                    
+                    creates_payload.append(new_record)
         
+        # 1. Handle Creates
+        if creates_payload:
+            console.print(f"Creating {len(creates_payload)} new [cyan]{file_type}[/cyan]s on [blue]{get_api_base_url(auth.env)}[/blue]...")
+            with auth.get_client() as client:
+                response = client.post(f"/object/{file_type}", json=creates_payload)
+                if response.status_code in [200, 201]:
+                    console.print(f"[bold green]✓ Successfully created {file_type} records.[/bold green]")
+                    newly_created = response.json() if isinstance(response.json(), list) else [response.json()]
+                    metadata.extend(newly_created)
+                else:
+                    console.print(f"[bold red]Create failed for {file_type}:[/bold red] {response.status_code}")
+                    console.print(response.text)
+
+        # 2. Handle Updates
         if updates_payload:
             console.print(f"Pushing {len(updates_payload)} updates for [cyan]{file_type}[/cyan] to [blue]{get_api_base_url(auth.env)}[/blue]...")
-            
             with auth.get_client() as client:
                 response = client.patch(f"/object/{file_type}", json=updates_payload)
-                
                 if response.status_code in [200, 204]:
                     console.print(f"[bold green]✓ Successfully updated {file_type} records.[/bold green]")
-                    
-                    # Update local metadata with the new content
                     updated_records = response.json() if response.status_code == 200 else []
                     if updated_records:
-                        meta_map = {r["id"]: r for r in metadata}
+                        # Refresh metadata map for updating
+                        current_meta_map = {r["id"]: r for r in metadata}
                         for updated in updated_records:
-                            meta_map[updated["id"]] = updated
-                        
-                        with open(metadata_path, "w") as f:
-                            json.dump(list(meta_map.values()), f, indent=4)
+                            current_meta_map[updated["id"]] = updated
+                        metadata = list(current_meta_map.values())
                 else:
                     console.print(f"[bold red]Push failed for {file_type}:[/bold red] {response.status_code}")
                     console.print(response.text)
-        else:
+        
+        # Save updated metadata back to disk
+        if creates_payload or updates_payload:
+            with open(metadata_path, "w") as f:
+                json.dump(metadata, f, indent=4)
+        
+        if not (creates_payload or updates_payload):
             console.print(f"No changes detected for [cyan]{file_type}[/cyan]s.")
 
 @app.callback()
