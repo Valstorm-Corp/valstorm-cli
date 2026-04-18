@@ -2,6 +2,10 @@ import typer
 import httpx
 from rich.console import Console
 import getpass
+import os
+import json
+import shutil
+from pathlib import Path
 from .auth import ValstormAuth, get_api_base_url
 
 app = typer.Typer(help="Valstorm Developer CLI", no_args_is_help=True)
@@ -113,6 +117,210 @@ def whoami(
             console.print(f"Role: {user.get('role', {}).get('name', 'Unknown')}")
         else:
             console.print(f"[bold red]Failed to load user data:[/bold red] {response.status_code}")
+
+@app.command()
+def init(
+    path: str = typer.Argument(None, help="Name of the directory to initialize the project in."),
+    profile: str = typer.Option("default", "--profile", "-p", help="The auth profile to use."),
+    env: str = typer.Option(None, "--env", "-e", help="The target environment.")
+):
+    """
+    Initialize a new Valstorm development project.
+    """
+    target_path_str = path or typer.prompt("Enter a name for your new project folder")
+    target_path = Path(target_path_str)
+    
+    if target_path.exists() and any(target_path.iterdir()):
+        console.print(f"[yellow]Warning: Directory '{target_path}' already exists and is not empty.[/yellow]")
+        if not typer.confirm("Do you want to continue initializing here?"):
+            raise typer.Exit()
+            
+    target_path.mkdir(parents=True, exist_ok=True)
+    
+    # 1. Configuration
+    auth = ValstormAuth(profile=profile, env=env)
+    
+    config = {
+        "env": auth.env,
+        "profile": auth.profile
+    }
+    
+    # Ensure .valstorm directory exists for internal state
+    (target_path / ".valstorm").mkdir(exist_ok=True)
+    
+    with open(target_path / "valstorm.json", "w") as f:
+        json.dump(config, f, indent=4)
+    
+    # 2. Create Directory Structure
+    (target_path / "triggers").mkdir(exist_ok=True)
+    (target_path / "functions").mkdir(exist_ok=True)
+    (target_path / "stubs").mkdir(exist_ok=True)
+    
+    # 3. Copy Stubs for IDE support
+    current_dir = Path(__file__).parent
+    source_stubs = current_dir / "stubs" / "platform.py"
+    
+    if source_stubs.exists():
+        shutil.copy(source_stubs, target_path / "stubs" / "platform.py")
+        console.print("[green]✓[/green] PlatformContext stubs copied for intellisense.")
+    else:
+        console.print("[yellow]![/yellow] Warning: Could not find built-in stubs to copy.")
+
+    # 4. Create a README
+    with open(target_path / "README.md", "w") as f:
+        f.write(f"# Valstorm Project: {target_path.name}\n\nLocal development environment for Valstorm triggers and functions.\n")
+
+    console.print(f"\n[bold green]🚀 Project initialized successfully in {target_path.absolute()}[/bold green]")
+    console.print(f"Next steps:\n  1. [cyan]cd {target_path.name}[/cyan]\n  2. [cyan]valstorm pull[/cyan]\n  3. Start coding in [blue]triggers/[/blue] or [blue]functions/[/blue]")
+
+def get_project_root() -> Path:
+    """Helper to find the valstorm.json file by searching upwards."""
+    current = Path.cwd()
+    while current != current.parent:
+        if (current / "valstorm.json").exists():
+            return current
+        current = current.parent
+    console.print("[bold red]Error:[/bold red] Could not find 'valstorm.json'. Are you in a Valstorm project directory?")
+    raise typer.Exit(1)
+
+def load_config(root: Path) -> dict:
+    with open(root / "valstorm.json", "r") as f:
+        return json.load(f)
+
+@app.command()
+def pull(
+    force: bool = typer.Option(False, "--force", help="Overwrite local changes without asking.")
+):
+    """
+    Download record triggers and functions from the Valstorm cloud.
+    """
+    root = get_project_root()
+    config = load_config(root)
+    auth = ValstormAuth(profile=config.get("profile"), env=config.get("env"))
+    
+    if not auth.ensure_valid_token():
+        console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
+        raise typer.Exit(1)
+
+    types = ["record_trigger", "function"]
+    
+    for file_type in types:
+        console.print(f"Pulling [cyan]{file_type}[/cyan]s...")
+        query = f"SELECT * FROM {file_type}"
+        
+        with auth.get_client() as client:
+            response = client.post("/query", json={"query": query})
+            
+            if response.status_code != 200:
+                console.print(f"[bold red]Fetch failed for {file_type}:[/bold red] {response.status_code}")
+                continue
+                
+            data = response.json()
+            records = data.get("data", data) if isinstance(data, dict) else data
+            
+            if not isinstance(records, list):
+                console.print(f"[yellow]No records found for {file_type}.[/yellow]")
+                continue
+
+            # Save metadata to hidden folder
+            meta_dir = root / ".valstorm"
+            meta_dir.mkdir(exist_ok=True)
+            with open(meta_dir / f"{file_type}_metadata.json", "w") as f:
+                json.dump(records, f, indent=4)
+
+            # Extract code
+            target_dir = root / ("triggers" if file_type == "record_trigger" else "functions")
+            target_dir.mkdir(exist_ok=True)
+            
+            count = 0
+            for record in records:
+                file_name = record.get("file_name")
+                code = record.get("code")
+                
+                if file_name and code:
+                    file_path = target_dir / file_name
+                    
+                    # Check if local file exists and has different content
+                    if file_path.exists() and not force:
+                        with open(file_path, "r") as f:
+                            local_code = f.read()
+                        if local_code != code:
+                            if not typer.confirm(f"Local changes detected in {file_name}. Overwrite?"):
+                                console.print(f"Skipping {file_name}")
+                                continue
+                    
+                    with open(file_path, "w") as f:
+                        f.write(code)
+                    count += 1
+            
+            console.print(f"[green]✓[/green] Synchronized {count} {file_type} files.")
+
+@app.command()
+def push():
+    """
+    Upload local changes to the Valstorm cloud.
+    """
+    root = get_project_root()
+    config = load_config(root)
+    auth = ValstormAuth(profile=config.get("profile"), env=config.get("env"))
+    
+    if not auth.ensure_valid_token():
+        console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
+        raise typer.Exit(1)
+
+    types = {"record_trigger": "triggers", "function": "functions"}
+    
+    for file_type, folder in types.items():
+        metadata_path = root / ".valstorm" / f"{file_type}_metadata.json"
+        if not metadata_path.exists():
+            console.print(f"[yellow]No metadata found for {file_type}. Pull first?[/yellow]")
+            continue
+            
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
+            
+        updates_payload = []
+        local_dir = root / folder
+        
+        for record in metadata:
+            file_name = record.get("file_name")
+            if not file_name: continue
+            
+            file_path = local_dir / file_name
+            if file_path.exists():
+                with open(file_path, "r") as f:
+                    local_code = f.read()
+                
+                if local_code != record.get("code"):
+                    updates_payload.append({
+                        "id": record["id"],
+                        "code": local_code,
+                        "app": record.get("app")
+                    })
+        
+        if updates_payload:
+            console.print(f"Pushing {len(updates_payload)} updates for [cyan]{file_type}[/cyan]...")
+            
+            with auth.get_client() as client:
+                response = client.patch(f"/object/{file_type}", json=updates_payload)
+                
+                if response.status_code in [200, 204]:
+                    console.print(f"[bold green]✓ Successfully updated {file_type} records.[/bold green]")
+                    
+                    # Update local metadata with the new content
+                    updated_records = response.json() if response.status_code == 200 else []
+                    if updated_records:
+                        meta_map = {r["id"]: r for r in metadata}
+                        for updated in updated_records:
+                            meta_map[updated["id"]] = updated
+                        
+                        with open(metadata_path, "w") as f:
+                            json.dump(list(meta_map.values()), f, indent=4)
+                else:
+                    console.print(f"[bold red]Push failed for {file_type}:[/bold red] {response.status_code}")
+                    console.print(response.text)
+        else:
+            console.print(f"No changes detected for [cyan]{file_type}[/cyan]s.")
 
 @app.callback()
 def main():
