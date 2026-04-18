@@ -193,6 +193,9 @@ if __name__ == "__main__":
     (object_dir / "record_trigger").mkdir(parents=True, exist_ok=True)
     (object_dir / "function").mkdir(parents=True, exist_ok=True)
     
+    schemas_dir = target_path / "schemas"
+    schemas_dir.mkdir(parents=True, exist_ok=True)
+    
     platform_dir = target_path / "valstorm_platform"
     platform_dir.mkdir(exist_ok=True)
     
@@ -212,11 +215,11 @@ if __name__ == "__main__":
 
     # 4. Create a README
     with open(target_path / "README.md", "w") as f:
-        f.write(f"# Valstorm Project: {target_path.name}\n\nLocal development environment for Valstorm triggers and functions.\n\n## Setup\n\n1. Install dependencies: `uv sync`\n2. Run MCP: `uv run run_mcp.py` or use Gemini CLI.\n")
+        f.write(f"# Valstorm Project: {target_path.name}\n\nLocal development environment for Valstorm triggers, functions, and schemas.\n\n## Setup\n\n1. Install dependencies: `uv sync`\n2. Run MCP: `uv run run_mcp.py` or use Gemini CLI.\n3. Pull assets: `valstorm pull` and `valstorm pull-schemas`\n")
 
     # 5. Create a .gitignore
     with open(target_path / ".gitignore", "w") as f:
-        f.write(".venv/\n__pycache__/\n*.pyc\n.env\n")
+        f.write(".venv/\n__pycache__/\n*.pyc\n.env\nobject/**/*.json\n")
 
     # 6. Bootstrap Gemini Settings
     gemini_dir = target_path / ".gemini"
@@ -238,7 +241,7 @@ if __name__ == "__main__":
     console.print("[green]✓[/green] Gemini MCP settings bootstrapped.")
 
     console.print(f"\n[bold green]🚀 Project initialized successfully in {target_path.absolute()}[/bold green]")
-    console.print(f"Next steps:\n  1. [cyan]cd {target_path.name}[/cyan]\n  2. [cyan]uv sync[/cyan]\n  3. [cyan]valstorm pull[/cyan]")
+    console.print(f"Next steps:\n  1. [cyan]cd {target_path.name}[/cyan]\n  2. [cyan]uv sync[/cyan]\n  3. [cyan]valstorm pull && valstorm pull-schemas[/cyan]")
 def get_project_root() -> Path:
     """Helper to find the valstorm.json file by searching upwards."""
     current = Path.cwd()
@@ -319,9 +322,29 @@ def pull(
         console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
         raise typer.Exit(1)
 
-    types = ["record_trigger", "function"]
+    # 1. Fetch available schemas to see what we can pull
+    with auth.get_client() as client:
+        schema_res = client.get("/schemas")
+        if schema_res.status_code != 200:
+            console.print("[bold red]Failed to fetch schemas.[/bold red]")
+            raise typer.Exit(1)
+        available_schemas = schema_res.json()
+
+    # 2. Define target types
+    core_types = ["record_trigger", "function"]
+    metadata_types = [
+        "ai_agent", "app", "app_page", "app_metadata", 
+        "permission", "notification_setting", 
+        "schedule_trigger_setting", "workspace"
+    ]
     
-    for file_type in types:
+    # Filter types that exist in the schemas
+    target_types = [t for t in (core_types + metadata_types) if t in available_schemas]
+    
+    if not target_types:
+        console.print("[yellow]No matching objects found in schemas to pull records for.[/yellow]")
+    
+    for file_type in target_types:
         console.print(f"Pulling [cyan]{file_type}[/cyan]s from [blue]{get_api_base_url(auth.env)}[/blue]...")
         query = f"SELECT * FROM {file_type}"
         
@@ -346,9 +369,11 @@ def pull(
             with open(target_dir / f"{file_type}_metadata.json", "w") as f:
                 json.dump(records, f, indent=4)
 
-            # Extract code
+            # Extract code if present
             count = 0
+            code_count = 0
             for record in records:
+                count += 1
                 file_name = record.get("file_name")
                 code = record.get("code")
                 
@@ -366,9 +391,65 @@ def pull(
                     
                     with open(file_path, "w") as f:
                         f.write(code)
-                    count += 1
+                    code_count += 1
             
-            console.print(f"[green]✓[/green] Synchronized {count} {file_type} files.")
+            if code_count > 0:
+                console.print(f"[green]✓[/green] Synchronized {count} {file_type} records ({code_count} files).")
+            else:
+                console.print(f"[green]✓[/green] Synchronized {count} {file_type} records.")
+    
+    # Also pull schema definitions
+    try:
+        pull_schemas(profile=profile, env=env)
+    except Exception as e:
+        console.print(f"[yellow]![/yellow] Warning: Failed to pull schemas during general pull: {e}")
+
+@app.command(name="pull-schemas")
+def pull_schemas(
+    profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
+):
+    """
+    Download object schemas from the Valstorm cloud.
+    """
+    root = get_project_root()
+    config = load_config(root)
+    
+    auth_profile = profile or config.get("profile")
+    auth_env = env or config.get("env")
+    
+    auth = ValstormAuth(profile=auth_profile, env=auth_env)
+    
+    if not auth.ensure_valid_token():
+        console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
+        raise typer.Exit(1)
+
+    console.print(f"Pulling [cyan]schemas[/cyan] from [blue]{get_api_base_url(auth.env)}[/blue]...")
+    
+    with auth.get_client() as client:
+        response = client.get("/schemas")
+        
+        if response.status_code != 200:
+            console.print(f"[bold red]Fetch failed for schemas:[/bold red] {response.status_code}")
+            raise typer.Exit(1)
+            
+        schemas = response.json()
+        
+        if not isinstance(schemas, dict):
+            console.print("[bold red]Unexpected response format for schemas.[/bold red]")
+            raise typer.Exit(1)
+
+        target_dir = root / "schemas"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        
+        count = 0
+        for api_name, schema_data in schemas.items():
+            file_path = target_dir / f"{api_name}.json"
+            with open(file_path, "w") as f:
+                json.dump(schema_data, f, indent=4)
+            count += 1
+            
+        console.print(f"[green]✓[/green] Synchronized {count} schema files to {target_dir}")
 
 @app.command()
 def push(
@@ -390,10 +471,20 @@ def push(
         console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
         raise typer.Exit(1)
 
-    types = ["record_trigger", "function"]
+    object_root = root / "object"
+    if not object_root.exists():
+        console.print("[yellow]No 'object' directory found. Nothing to push.[/yellow]")
+        return
+
+    # Identify which types we have locally
+    types = [d.name for d in object_root.iterdir() if d.is_dir() and not d.name.startswith(".")]
     
+    if not types:
+        console.print("[yellow]No object types found in 'object' directory.[/yellow]")
+        return
+
     for file_type in types:
-        local_dir = root / "object" / file_type
+        local_dir = object_root / file_type
         metadata_path = local_dir / f"{file_type}_metadata.json"
         
         metadata = []
@@ -404,9 +495,6 @@ def push(
         updates_payload = []
         creates_payload = []
         
-        if not local_dir.exists():
-            continue
-
         # Map current metadata for easy lookup
         meta_map = {r.get("file_name"): r for r in metadata if r.get("file_name")}
         
