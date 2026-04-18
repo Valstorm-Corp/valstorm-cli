@@ -188,6 +188,25 @@ def init(
     with open(target_path / ".gitignore", "w") as f:
         f.write("__pycache__/\n*.pyc\n.env\n")
 
+    # 6. Bootstrap Gemini Settings
+    gemini_dir = target_path / ".gemini"
+    gemini_dir.mkdir(exist_ok=True)
+    gemini_settings = {
+        "mcpServers": {
+            "valstorm": {
+                "command": "valstorm",
+                "args": ["mcp", "start"],
+                "env": {
+                    "VALSTORM_ENV": auth.env,
+                    "VALSTORM_PROFILE": auth.profile
+                }
+            }
+        }
+    }
+    with open(gemini_dir / "settings.json", "w") as f:
+        json.dump(gemini_settings, f, indent=4)
+    console.print("[green]✓[/green] Gemini MCP settings bootstrapped.")
+
     console.print(f"\n[bold green]🚀 Project initialized successfully in {target_path.absolute()}[/bold green]")
     console.print(f"Next steps:\n  1. [cyan]cd {target_path.name}[/cyan]\n  2. [cyan]valstorm pull[/cyan]\n  3. Start coding in [blue]object/record_trigger/[/blue] or [blue]object/function/[/blue]")
 
