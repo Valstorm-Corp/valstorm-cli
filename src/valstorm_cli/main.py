@@ -184,7 +184,7 @@ def init(
 
     # 5. Create a .gitignore
     with open(target_path / ".gitignore", "w") as f:
-        f.write("__pycache__/\n*.pyc\n.env\n*.json\n")
+        f.write("__pycache__/\n*.pyc\n.env\n")
 
     console.print(f"\n[bold green]🚀 Project initialized successfully in {target_path.absolute()}[/bold green]")
     console.print(f"Next steps:\n  1. [cyan]cd {target_path.name}[/cyan]\n  2. [cyan]valstorm pull[/cyan]\n  3. Start coding in [blue]object/record_trigger/[/blue] or [blue]object/function/[/blue]")
@@ -203,6 +203,47 @@ def load_config(root: Path) -> dict:
     with open(root / "valstorm.json", "r") as f:
         return json.load(f)
 
+def update_local_stubs(target_path: Path, silent: bool = False):
+    """Copies the latest platform_context.py from the CLI package to the project."""
+    platform_dir = target_path / "valstorm_platform"
+    platform_dir.mkdir(exist_ok=True)
+    
+    # Ensure __init__.py exists
+    init_file = platform_dir / "__init__.py"
+    if not init_file.exists():
+        with open(init_file, "w") as f:
+            f.write("# Valstorm Platform SDK\n")
+            
+    current_dir = Path(__file__).parent
+    source_stubs = current_dir / "stubs" / "platform_context.py"
+    dest_stubs = platform_dir / "platform_context.py"
+    
+    if source_stubs.exists():
+        # Check if an update is actually needed by comparing file contents or modification times
+        # For simplicity, we just overwrite if they differ
+        needs_update = True
+        if dest_stubs.exists():
+            with open(source_stubs, "r") as src, open(dest_stubs, "r") as dst:
+                if src.read() == dst.read():
+                    needs_update = False
+                    
+        if needs_update:
+            shutil.copy(source_stubs, dest_stubs)
+            if not silent:
+                console.print("[green]✓[/green] PlatformContext stubs updated for intellisense.")
+        elif not silent:
+            console.print("[dim]PlatformContext stubs are already up-to-date.[/dim]")
+    elif not silent:
+        console.print("[yellow]![/yellow] Warning: Could not find built-in stubs to copy.")
+
+@app.command(name="update-stubs")
+def update_stubs_command():
+    """
+    Update the local PlatformContext stubs to the version bundled with the CLI.
+    """
+    root = get_project_root()
+    update_local_stubs(root)
+
 @app.command()
 def pull(
     force: bool = typer.Option(False, "--force", help="Overwrite local changes without asking."),
@@ -213,6 +254,10 @@ def pull(
     Download record triggers and functions from the Valstorm cloud.
     """
     root = get_project_root()
+    
+    # Auto-update stubs silently on pull
+    update_local_stubs(root, silent=True)
+    
     config = load_config(root)
     
     auth_profile = profile or config.get("profile")
