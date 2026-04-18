@@ -299,12 +299,13 @@ def update_stubs_command():
 
 @app.command()
 def pull(
+    object_type: str = typer.Argument(None, help="Specific object type to pull (e.g., record_trigger)."),
     force: bool = typer.Option(False, "--force", help="Overwrite local changes without asking."),
     profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
     env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
 ):
     """
-    Download record triggers and functions from the Valstorm cloud.
+    Download records for metadata objects from the Valstorm cloud.
     """
     root = get_project_root()
     
@@ -331,15 +332,20 @@ def pull(
         available_schemas = schema_res.json()
 
     # 2. Define target types
-    core_types = ["record_trigger", "function"]
-    metadata_types = [
-        "ai_agent", "app", "app_page", "app_metadata", 
-        "permission", "notification_setting", 
-        "schedule_trigger_setting", "workspace"
-    ]
-    
-    # Filter types that exist in the schemas
-    target_types = [t for t in (core_types + metadata_types) if t in available_schemas]
+    if object_type:
+        if object_type not in available_schemas:
+            console.print(f"[bold red]Error:[/bold red] Object type '{object_type}' not found in schemas.")
+            raise typer.Exit(1)
+        target_types = [object_type]
+    else:
+        core_types = ["record_trigger", "function"]
+        metadata_types = [
+            "ai_agent", "app", "app_page", "app_metadata", 
+            "permission", "notification_setting", 
+            "schedule_trigger_setting", "workspace"
+        ]
+        # Filter types that exist in the schemas
+        target_types = [t for t in (core_types + metadata_types) if t in available_schemas]
     
     if not target_types:
         console.print("[yellow]No matching objects found in schemas to pull records for.[/yellow]")
@@ -400,12 +406,13 @@ def pull(
     
     # Also pull schema definitions
     try:
-        pull_schemas(profile=profile, env=env)
+        pull_schemas(object_type=object_type, profile=profile, env=env)
     except Exception as e:
-        console.print(f"[yellow]![/yellow] Warning: Failed to pull schemas during general pull: {e}")
+        console.print(f"[yellow]![/yellow] Warning: Failed to pull schemas during pull: {e}")
 
 @app.command(name="pull-schemas")
 def pull_schemas(
+    object_type: str = typer.Argument(None, help="Specific object schema to pull."),
     profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
     env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
 ):
@@ -427,13 +434,24 @@ def pull_schemas(
     console.print(f"Pulling [cyan]schemas[/cyan] from [blue]{get_api_base_url(auth.env)}[/blue]...")
     
     with auth.get_client() as client:
-        response = client.get("/schemas")
+        # If specific object requested, use the specific endpoint if it's more efficient, 
+        # but the current logic fetches all and filters. 
+        # Actually /schemas returns everything, let's keep it simple for now or check if /schema/{object} is better.
+        endpoint = f"/schema/{object_type}" if object_type else "/schemas"
+        response = client.get(endpoint)
         
         if response.status_code != 200:
             console.print(f"[bold red]Fetch failed for schemas:[/bold red] {response.status_code}")
             raise typer.Exit(1)
             
-        schemas = response.json()
+        data = response.json()
+        
+        if object_type:
+            # Response is a single schema object
+            schemas = {object_type: data}
+        else:
+            # Response is a map of schemas
+            schemas = data
         
         if not isinstance(schemas, dict):
             console.print("[bold red]Unexpected response format for schemas.[/bold red]")
