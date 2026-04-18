@@ -157,6 +157,43 @@ def init(
     
     with open(target_path / "valstorm.json", "w") as f:
         json.dump(config, f, indent=4)
+
+    # 1.1 Create pyproject.toml for the new project
+    project_toml = {
+        "project": {
+            "name": target_path.name,
+            "version": "0.1.0",
+            "dependencies": [
+                "valstorm-cli @ git+https://github.com/Valstorm-Corp/valstorm-cli.git"
+            ]
+        }
+    }
+    # Using a simple f-string for the TOML to avoid adding a toml library dependency to the CLI
+    toml_content = f"""[project]
+name = "{target_path.name}"
+version = "0.1.0"
+description = "Valstorm development project"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "valstorm-cli @ git+https://github.com/Valstorm-Corp/valstorm-cli.git",
+    "valstorm-mcp @ git+https://github.com/Valstorm-Corp/valstorm-mcp.git",
+    "httpx>=0.27.0"
+]
+"""
+    with open(target_path / "pyproject.toml", "w") as f:
+        f.write(toml_content)
+
+    # 1.2 Create run_mcp.py entry point
+    mcp_wrapper = """from valstorm_mcp.main import mcp
+import os
+
+if __name__ == "__main__":
+    # Ensure environment variables are passed through
+    mcp.run()
+"""
+    with open(target_path / "run_mcp.py", "w") as f:
+        f.write(mcp_wrapper)
     
     # 2. Create Directory Structure
     object_dir = target_path / "object"
@@ -182,11 +219,11 @@ def init(
 
     # 4. Create a README
     with open(target_path / "README.md", "w") as f:
-        f.write(f"# Valstorm Project: {target_path.name}\n\nLocal development environment for Valstorm triggers and functions.\n")
+        f.write(f"# Valstorm Project: {target_path.name}\n\nLocal development environment for Valstorm triggers and functions.\n\n## Setup\n\n1. Install dependencies: `uv sync`\n2. Run MCP: `uv run run_mcp.py` or use Gemini CLI.\n")
 
     # 5. Create a .gitignore
     with open(target_path / ".gitignore", "w") as f:
-        f.write("__pycache__/\n*.pyc\n.env\n")
+        f.write(".venv/\n__pycache__/\n*.pyc\n.env\n")
 
     # 6. Bootstrap Gemini Settings
     gemini_dir = target_path / ".gemini"
@@ -194,8 +231,8 @@ def init(
     gemini_settings = {
         "mcpServers": {
             "valstorm": {
-                "command": "valstorm",
-                "args": ["mcp", "start"],
+                "command": "uv",
+                "args": ["run", "run_mcp.py"],
                 "env": {
                     "VALSTORM_ENV": auth.env,
                     "VALSTORM_PROFILE": auth.profile
@@ -208,8 +245,7 @@ def init(
     console.print("[green]✓[/green] Gemini MCP settings bootstrapped.")
 
     console.print(f"\n[bold green]🚀 Project initialized successfully in {target_path.absolute()}[/bold green]")
-    console.print(f"Next steps:\n  1. [cyan]cd {target_path.name}[/cyan]\n  2. [cyan]valstorm pull[/cyan]\n  3. Start coding in [blue]object/record_trigger/[/blue] or [blue]object/function/[/blue]")
-
+    console.print(f"Next steps:\n  1. [cyan]cd {target_path.name}[/cyan]\n  2. [cyan]uv sync[/cyan]\n  3. [cyan]valstorm pull[/cyan]")
 def get_project_root() -> Path:
     """Helper to find the valstorm.json file by searching upwards."""
     current = Path.cwd()
