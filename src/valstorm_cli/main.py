@@ -10,8 +10,136 @@ from .auth import ValstormAuth, get_api_base_url
 
 app = typer.Typer(help="Valstorm Developer CLI", no_args_is_help=True)
 mcp_app = typer.Typer(help="Manage the Valstorm MCP Server")
+auth_app = typer.Typer(help="Manage Valstorm authentication profiles")
+
 app.add_typer(mcp_app, name="mcp")
+app.add_typer(auth_app, name="auth")
 console = Console()
+
+@auth_app.command(name="list")
+def list_profiles():
+    """
+    List all available saved environments and profiles you can log into.
+    """
+    auth_dir = Path.home() / ".valstorm"
+    if not auth_dir.exists():
+        console.print("[yellow]No Valstorm profiles found. Please login first.[/yellow]")
+        return
+        
+    found = []
+    # auth files are usually named auth_{env}_{profile}.json or auth_{env}.json
+    for path in auth_dir.glob("auth_*.json"):
+        name_parts = path.stem.split("_")
+        env = "prod"
+        profile = "default"
+        
+        if len(name_parts) == 2:
+            # auth_{env}.json
+            env = name_parts[1]
+        elif len(name_parts) >= 3:
+            # auth_{env}_{profile}.json
+            env = name_parts[1]
+            profile = "_".join(name_parts[2:])
+            
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+            user = data.get("user", {})
+            org_name = data.get("organization_name", "Unknown Org")
+            found.append({"env": env, "profile": profile, "org": org_name, "user": user.get("name", "Unknown User"), "email": user.get("email", "Unknown Email"), "org_id": user.get("organization_id", "Unknown Org ID"), "user_id": user.get("id", "Unknown User ID")})
+        except Exception:
+            found.append({"env": env, "profile": profile, "org": "Invalid file"})
+
+    if not found:
+        console.print("[yellow]No Valstorm profiles found. Please login first.[/yellow]")
+        return
+
+    console.print("\n[bold]Available Authentication Profiles:[/bold]")
+    
+    # Identify currently active profile if in a project
+    active_profile = None
+    active_env = None
+    try:
+        current = Path.cwd()
+        while current != current.parent:
+            if (current / "valstorm.json").exists():
+                with open(current / "valstorm.json", "r") as f:
+                    config = json.load(f)
+                    active_profile = config.get("profile")
+                    active_env = config.get("env")
+                break
+            current = current.parent
+    except Exception:
+        pass
+
+    for entry in found:
+        is_active = (entry["profile"] == active_profile and entry["env"] == active_env)
+        marker = "[green]*[/green]" if is_active else " "
+        console.print(f"{marker} Profile: [cyan]{entry['profile']}[/cyan] | Env: [blue]{entry['env']}[/blue] | Org: {entry['org']}")
+        
+    if active_profile:
+        console.print(f"\n[dim]* Indicates currently targeted profile in valstorm.json[/dim]")
+
+@auth_app.command(name="switch")
+def switch_profile(
+    profile: str = typer.Argument(..., help="The profile to switch to."),
+    env: str = typer.Option(None, "--env", "-e", help="The environment to switch to.")
+):
+    """
+    Switch the currently targeted auth profile for the current Valstorm project.
+    """
+    try:
+        root = get_project_root()
+    except Exception:
+        console.print("[bold red]Cannot switch profiles: Not in a Valstorm project directory.[/bold red]")
+        raise typer.Exit(1)
+        
+    config = load_config(root)
+    
+    # Fallback to existing env if not provided
+    new_env = env or config.get("env") or "prod"
+    
+    # Check if this profile actually exists
+    auth_dir = Path.home() / ".valstorm"
+    auth_file = auth_dir / f"auth_{new_env}_{profile}.json"
+    legacy_auth_file = auth_dir / f"auth_{new_env}.json"
+    
+    if not auth_file.exists() and not (profile == "default" and legacy_auth_file.exists()):
+        console.print(f"[yellow]Warning:[/yellow] Profile [cyan]{profile}[/cyan] for environment [blue]{new_env}[/blue] does not appear to have saved credentials.")
+        console.print(f"You may need to run: [bold]valstorm login -p {profile} -e {new_env}[/bold]")
+        if not typer.confirm("Do you want to switch to it anyway?"):
+            raise typer.Exit(0)
+            
+    config["profile"] = profile
+    config["env"] = new_env
+    
+    with open(root / "valstorm.json", "w") as f:
+        json.dump(config, f, indent=4)
+        
+    # Also update Gemini MCP Settings if they exist
+    gemini_dir = root / ".gemini"
+    settings_file = gemini_dir / "settings.json"
+    if settings_file.exists():
+        try:
+            with open(settings_file, "r") as f:
+                gemini_settings = json.load(f)
+                
+            if "mcpServers" not in gemini_settings:
+                gemini_settings["mcpServers"] = {}
+            if "valstorm" not in gemini_settings["mcpServers"]:
+                gemini_settings["mcpServers"]["valstorm"] = {}
+            if "env" not in gemini_settings["mcpServers"]["valstorm"]:
+                gemini_settings["mcpServers"]["valstorm"]["env"] = {}
+                
+            gemini_settings["mcpServers"]["valstorm"]["env"]["VALSTORM_PROFILE"] = profile
+            gemini_settings["mcpServers"]["valstorm"]["env"]["VALSTORM_ENV"] = new_env
+            
+            with open(settings_file, "w") as f:
+                json.dump(gemini_settings, f, indent=4)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not update Gemini MCP settings: {e}[/yellow]")
+            
+    console.print(f"[green]✓[/green] Successfully switched project target to Profile: [cyan]{profile}[/cyan] (Env: [blue]{new_env}[/blue])")
 
 @app.command()
 def status():
@@ -87,6 +215,20 @@ def login(
                 access_token=data["access_token"], 
                 refresh_token=data.get("refresh_token")
             )
+            
+            # Fetch user details to save organization name for the profile list
+            with auth.get_client() as auth_client:
+                load_res = auth_client.get("/auth/load")
+                if load_res.status_code == 200:
+                    user_data = load_res.json()
+                    user = user_data.get("user", user_data) # handle both nested and unnested responses
+                    if user.get("organization_name"):
+                        auth.save_tokens(
+                            access_token=data["access_token"],
+                            refresh_token=data.get("refresh_token"),
+                            organization_name=user.get("organization_name")
+                        )
+                        
             console.print("[bold green]Successfully logged in![/bold green]")
         else:
             console.print("[bold red]Unexpected response during login.[/bold red]")
