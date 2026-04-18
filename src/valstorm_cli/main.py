@@ -154,15 +154,20 @@ def init(
     # 2. Create Directory Structure
     (target_path / "triggers").mkdir(exist_ok=True)
     (target_path / "functions").mkdir(exist_ok=True)
-    (target_path / "stubs").mkdir(exist_ok=True)
+    platform_dir = target_path / "valstorm_platform"
+    platform_dir.mkdir(exist_ok=True)
+    
+    # Create __init__.py to make it a module
+    with open(platform_dir / "__init__.py", "w") as f:
+        f.write("# Valstorm Platform SDK\n")
     
     # 3. Copy Stubs for IDE support
     current_dir = Path(__file__).parent
-    source_stubs = current_dir / "stubs" / "platform.py"
+    source_stubs = current_dir / "stubs" / "platform_context.py"
     
     if source_stubs.exists():
-        shutil.copy(source_stubs, target_path / "stubs" / "platform.py")
-        console.print("[green]✓[/green] PlatformContext stubs copied for intellisense.")
+        shutil.copy(source_stubs, platform_dir / "platform_context.py")
+        console.print("[green]✓[/green] PlatformContext copied for intellisense.")
     else:
         console.print("[yellow]![/yellow] Warning: Could not find built-in stubs to copy.")
 
@@ -189,14 +194,20 @@ def load_config(root: Path) -> dict:
 
 @app.command()
 def pull(
-    force: bool = typer.Option(False, "--force", help="Overwrite local changes without asking.")
+    force: bool = typer.Option(False, "--force", help="Overwrite local changes without asking."),
+    profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
 ):
     """
     Download record triggers and functions from the Valstorm cloud.
     """
     root = get_project_root()
     config = load_config(root)
-    auth = ValstormAuth(profile=config.get("profile"), env=config.get("env"))
+    
+    auth_profile = profile or config.get("profile")
+    auth_env = env or config.get("env")
+    
+    auth = ValstormAuth(profile=auth_profile, env=auth_env)
     
     if not auth.ensure_valid_token():
         console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
@@ -205,7 +216,7 @@ def pull(
     types = ["record_trigger", "function"]
     
     for file_type in types:
-        console.print(f"Pulling [cyan]{file_type}[/cyan]s...")
+        console.print(f"Pulling [cyan]{file_type}[/cyan]s from [blue]{get_api_base_url(auth.env)}[/blue]...")
         query = f"SELECT * FROM {file_type}"
         
         with auth.get_client() as client:
@@ -256,13 +267,20 @@ def pull(
             console.print(f"[green]✓[/green] Synchronized {count} {file_type} files.")
 
 @app.command()
-def push():
+def push(
+    profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
+):
     """
     Upload local changes to the Valstorm cloud.
     """
     root = get_project_root()
     config = load_config(root)
-    auth = ValstormAuth(profile=config.get("profile"), env=config.get("env"))
+    
+    auth_profile = profile or config.get("profile")
+    auth_env = env or config.get("env")
+    
+    auth = ValstormAuth(profile=auth_profile, env=auth_env)
     
     if not auth.ensure_valid_token():
         console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
@@ -299,7 +317,7 @@ def push():
                     })
         
         if updates_payload:
-            console.print(f"Pushing {len(updates_payload)} updates for [cyan]{file_type}[/cyan]...")
+            console.print(f"Pushing {len(updates_payload)} updates for [cyan]{file_type}[/cyan] to [blue]{get_api_base_url(auth.env)}[/blue]...")
             
             with auth.get_client() as client:
                 response = client.patch(f"/object/{file_type}", json=updates_payload)

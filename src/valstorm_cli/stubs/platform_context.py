@@ -255,7 +255,20 @@ class PlatformContext:
     """
 
     def __init__(self, current_user: User, transaction_scope: Optional[Any]=None):
-        pass
+        """Initialize the platform context."""
+        self.user = current_user
+        self.records: RecordContext = None
+        self.query: QueryContext = None
+        self.schemas: SchemaContext = None
+        self.tasks: TaskContext = None
+        self.files: FileContext = None
+        self.communications: CommunicationContext = None
+        self.metadata: MetadataContext = None
+        self.integrations: IntegrationContext = None
+        self.workflows: WorkflowContext = None
+        self.agents: AgentContext = None
+        self.utils: UtilsContext = None
+        self.exceptions: ExceptionContext = None
 
     @property
     def db(self):
