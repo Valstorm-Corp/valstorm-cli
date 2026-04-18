@@ -9,6 +9,8 @@ from pathlib import Path
 from .auth import ValstormAuth, get_api_base_url
 
 app = typer.Typer(help="Valstorm Developer CLI", no_args_is_help=True)
+mcp_app = typer.Typer(help="Manage the Valstorm MCP Server")
+app.add_typer(mcp_app, name="mcp")
 console = Console()
 
 @app.command()
@@ -434,6 +436,19 @@ def push(
         
         if not (creates_payload or updates_payload):
             console.print(f"No changes detected for [cyan]{file_type}[/cyan]s.")
+
+@mcp_app.command(name="start")
+def mcp_start():
+    """
+    Start the Valstorm MCP server.
+    """
+    try:
+        from valstorm_mcp.main import mcp as server
+        console.print("[bold green]Starting Valstorm MCP server...[/bold green]")
+        server.run()
+    except ImportError:
+        console.print("[bold red]Error:[/bold red] valstorm-mcp package not found. Is it installed?")
+        raise typer.Exit(1)
 
 @app.callback()
 def main():
