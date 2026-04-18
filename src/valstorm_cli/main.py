@@ -159,16 +159,6 @@ def init(
         json.dump(config, f, indent=4)
 
     # 1.1 Create pyproject.toml for the new project
-    project_toml = {
-        "project": {
-            "name": target_path.name,
-            "version": "0.1.0",
-            "dependencies": [
-                "valstorm-cli @ git+https://github.com/Valstorm-Corp/valstorm-cli.git"
-            ]
-        }
-    }
-    # Using a simple f-string for the TOML to avoid adding a toml library dependency to the CLI
     toml_content = f"""[project]
 name = "{target_path.name}"
 version = "0.1.0"
@@ -184,12 +174,15 @@ dependencies = [
     with open(target_path / "pyproject.toml", "w") as f:
         f.write(toml_content)
 
-    # 1.2 Create run_mcp.py entry point
+    # 1.2 Create .python-version
+    with open(target_path / ".python-version", "w") as f:
+        f.write("3.11\n")
+
+    # 1.3 Create run_mcp.py entry point
     mcp_wrapper = """from valstorm_mcp.main import mcp
 import os
 
 if __name__ == "__main__":
-    # Ensure environment variables are passed through
     mcp.run()
 """
     with open(target_path / "run_mcp.py", "w") as f:

@@ -8,11 +8,8 @@ dependencies = [
     "typer>=0.12.0",
     "httpx>=0.27.0",
     "rich>=13.0.0",
-    "valstorm-mcp"
+    "valstorm-mcp @ git+https://github.com/Valstorm-Corp/valstorm-mcp.git"
 ]
-
-[tool.uv.sources]
-valstorm-mcp = { path = "../apps/valstorm-mcp" }
 
 [project.scripts]
 valstorm = "valstorm_cli.main:app"
@@ -20,6 +17,9 @@ valstorm = "valstorm_cli.main:app"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/valstorm_cli"]
