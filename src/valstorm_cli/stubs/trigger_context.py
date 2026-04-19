@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Optional, Annotated, Any, List, Dict, Union, Callable, Set
 
 # Mock types for hinting
-class User: pass
 class TransactionScope: pass
 class TriggerTransaction: pass
 class PlatformContext: pass
@@ -17,6 +16,7 @@ import time
 import contextvars
 from typing import Dict, List, Set, Optional, Any
 from uuid import uuid4
+from .models import User
 _active_transaction = contextvars.ContextVar('active_transaction', default=None)
 
 class TriggerTransaction:

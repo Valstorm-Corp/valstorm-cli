@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Optional, Annotated, Any, List, Dict, Union, Callable, Set
 
 # Mock types for hinting
-class User: pass
 class TransactionScope: pass
 class TriggerTransaction: pass
 class PlatformContext: pass
@@ -16,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Optional, Annotated, Any, List, Dict, Union, Callable
 from fastapi import Depends, HTTPException, Request
 from .trigger_context import TransactionScope
+from .models import User
 
 class BaseContext:
     """Base class for all domain-specific contexts."""
