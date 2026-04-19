@@ -345,19 +345,27 @@ if __name__ == "__main__":
     with open(platform_dir / "__init__.py", "w") as f:
         f.write("# Valstorm Platform SDK\n")
     
-    # 3. Copy Stubs for IDE support
-    current_dir = Path(__file__).parent
-    source_stubs = current_dir / "stubs" / "platform_context.py"
-    
-    if source_stubs.exists():
-        shutil.copy(source_stubs, platform_dir / "platform_context.py")
-        console.print("[green]✓[/green] PlatformContext copied for intellisense.")
-    else:
-        console.print("[yellow]![/yellow] Warning: Could not find built-in stubs to copy.")
+    # 3. Copy Platform Assets (Stubs & Docs) for IDE and AI support
+    update_local_stubs(target_path)
 
     # 4. Create a README
     with open(target_path / "README.md", "w") as f:
         f.write(f"# Valstorm Project: {target_path.name}\n\nLocal development environment for Valstorm triggers, functions, and schemas.\n\n## Setup\n\n1. Install dependencies: `uv sync`\n2. Run MCP: `uv run run_mcp.py` or use Gemini CLI.\n3. Pull assets: `valstorm pull` and `valstorm pull-schemas`\n")
+
+    # 4.1 Create GEMINI.md for AI context
+    with open(target_path / "GEMINI.md", "w") as f:
+        f.write(f"""# Valstorm AI Context: {target_path.name}
+
+This project contains Valstorm platform development assets. 
+Documentation for the platform, including permissions, query engine, and AI agents, can be found in the `valstorm_platform/docs` directory.
+
+## Project Structure
+- `object/`: Local copies of record triggers and functions.
+- `schemas/`: Local copies of object schemas.
+- `valstorm_platform/`: Platform SDK stubs and documentation.
+- `valstorm_platform/docs/`: Comprehensive documentation for Valstorm.
+""")
+
 
     # 5. Create a .gitignore
     with open(target_path / ".gitignore", "w") as f:
@@ -376,6 +384,20 @@ if __name__ == "__main__":
                     "VALSTORM_PROFILE": auth.profile
                 }
             }
+        },
+        "hooks": {
+            "SessionStart": [
+                {
+                    "matcher": ".*",
+                    "hooks": [
+                        {
+                            "name": "inject-docs",
+                            "type": "command",
+                            "command": "python3 valstorm_platform/hooks/inject_docs.py"
+                        }
+                    ]
+                }
+            ]
         }
     }
     with open(gemini_dir / "settings.json", "w") as f:
@@ -399,7 +421,7 @@ def load_config(root: Path) -> dict:
         return json.load(f)
 
 def update_local_stubs(target_path: Path, silent: bool = False):
-    """Copies the latest platform_context.py from the CLI package to the project."""
+    """Copies all platform assets (stubs and documentation) from the CLI package to the project."""
     platform_dir = target_path / "valstorm_platform"
     platform_dir.mkdir(exist_ok=True)
     
@@ -410,26 +432,38 @@ def update_local_stubs(target_path: Path, silent: bool = False):
             f.write("# Valstorm Platform SDK\n")
             
     current_dir = Path(__file__).parent
-    source_stubs = current_dir / "stubs" / "platform_context.py"
-    dest_stubs = platform_dir / "platform_context.py"
+    source_assets_dir = current_dir / "stubs"
     
-    if source_stubs.exists():
-        # Check if an update is actually needed by comparing file contents or modification times
-        # For simplicity, we just overwrite if they differ
-        needs_update = True
-        if dest_stubs.exists():
-            with open(source_stubs, "r") as src, open(dest_stubs, "r") as dst:
-                if src.read() == dst.read():
-                    needs_update = False
-                    
-        if needs_update:
-            shutil.copy(source_stubs, dest_stubs)
-            if not silent:
-                console.print("[green]✓[/green] PlatformContext stubs updated for intellisense.")
-        elif not silent:
-            console.print("[dim]PlatformContext stubs are already up-to-date.[/dim]")
+    if source_assets_dir.exists():
+        # Recursively copy all files from stubs/ to valstorm_platform/
+        for root, dirs, files in os.walk(source_assets_dir):
+            # Calculate relative path from source_assets_dir
+            rel_path = Path(root).relative_to(source_assets_dir)
+            dest_root = platform_dir / rel_path
+            dest_root.mkdir(parents=True, exist_ok=True)
+            
+            for file in files:
+                if file.endswith(".pyc") or file == "__pycache__":
+                    continue
+                
+                source_file = Path(root) / file
+                dest_file = dest_root / file
+                
+                # Check if an update is needed
+                needs_update = True
+                if dest_file.exists():
+                    # For performance, we could check mtime, but content check is safer for stubs
+                    # Actually, for large files or many files, mtime is better.
+                    if source_file.stat().st_mtime <= dest_file.stat().st_mtime:
+                        needs_update = False
+                
+                if needs_update:
+                    shutil.copy2(source_file, dest_file)
+        
+        if not silent:
+            console.print("[green]✓[/green] Valstorm platform assets (stubs & docs) synced.")
     elif not silent:
-        console.print("[yellow]![/yellow] Warning: Could not find built-in stubs to copy.")
+        console.print("[yellow]![/yellow] Warning: Could not find built-in platform assets to copy.")
 
 @app.command(name="update-stubs")
 def update_stubs_command():
