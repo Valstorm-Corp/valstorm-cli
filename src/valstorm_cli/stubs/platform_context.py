@@ -3,16 +3,19 @@
 # These stubs provide type hints for local development.
 
 from datetime import datetime
-from typing import Optional, Annotated, Any, List, Dict, Union, Callable
+from typing import Optional, Annotated, Any, List, Dict, Union, Callable, Set
 
 # Mock types for hinting
 class User: pass
 class TransactionScope: pass
+class TriggerTransaction: pass
+class PlatformContext: pass
 class Request: pass
 
 from datetime import datetime, timezone
 from typing import Optional, Annotated, Any, List, Dict, Union, Callable
 from fastapi import Depends, HTTPException, Request
+from .trigger_context import TransactionScope
 
 class BaseContext:
     """Base class for all domain-specific contexts."""
@@ -256,7 +259,7 @@ class PlatformContext:
 
     def __init__(self, current_user: User, transaction_scope: Optional[Any]=None):
         """Initialize the platform context."""
-        self.user = current_user
+        self.user = None
         self.records: RecordContext = None
         self.query: QueryContext = None
         self.schemas: SchemaContext = None
@@ -269,10 +272,6 @@ class PlatformContext:
         self.agents: AgentContext = None
         self.utils: UtilsContext = None
         self.exceptions: ExceptionContext = None
-
-    @property
-    def db(self):
-        pass
 
     @property
     def models(self):
