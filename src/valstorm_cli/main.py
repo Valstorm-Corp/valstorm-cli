@@ -5,6 +5,8 @@ import getpass
 import os
 import json
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from .auth import ValstormAuth, get_api_base_url
 
@@ -233,6 +235,43 @@ def login(
         else:
             console.print("[bold red]Unexpected response during login.[/bold red]")
             console.print(data)
+
+@app.command()
+def update():
+    """
+    Update the Valstorm CLI to the latest version from GitHub.
+    """
+    console.print("Updating Valstorm CLI to the latest version from GitHub...")
+    repo_url = "git+https://github.com/Valstorm-Corp/valstorm-cli.git"
+    
+    try:
+        # Check if installed as a uv tool first
+        if shutil.which("uv"):
+            res = subprocess.run(["uv", "tool", "list"], capture_output=True, text=True)
+            if "valstorm-cli" in res.stdout:
+                console.print("Detected installation as a [cyan]uv tool[/cyan]. Upgrading...")
+                subprocess.run(["uv", "tool", "upgrade", "valstorm-cli"], check=True)
+                console.print("[bold green]✓[/bold green] Valstorm CLI updated successfully.")
+                return
+
+        # Fallback to pip upgrade
+        # We try uv pip install if uv is available, otherwise standard pip
+        if shutil.which("uv"):
+            console.print("Using [cyan]uv[/cyan] to upgrade...")
+            cmd = ["uv", "pip", "install", "--upgrade", repo_url]
+        else:
+            console.print("Using [cyan]pip[/cyan] to upgrade...")
+            cmd = [sys.executable, "-m", "pip", "install", "--upgrade", repo_url]
+             
+        subprocess.run(cmd, check=True)
+        console.print("[bold green]✓[/bold green] Valstorm CLI updated successfully.")
+        
+    except subprocess.CalledProcessError as e:
+        console.print(f"[bold red]Error during update:[/bold red] {e}")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[bold red]An unexpected error occurred:[/bold red] {e}")
+        raise typer.Exit(1)
 
 @app.command()
 def whoami(

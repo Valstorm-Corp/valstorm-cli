@@ -375,6 +375,7 @@ class User(BetterBaseModel):
     availability: Optional[UserAvailability] = UserAvailability()
     integration_user: Optional[bool] = False
     is_impersonating: bool = False
+    scopes: List[str] = []
     license: Optional[UserLicense] = None
     ui_access: bool = True
     profile_picture: Optional[Image] = None
