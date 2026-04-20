@@ -515,7 +515,7 @@ def update_stubs_command():
 @app.command()
 def pull(
     object_type: str = typer.Argument(None, help="Specific object type to pull (e.g., record_trigger)."),
-    force: bool = typer.Option(False, "--force", help="Overwrite local changes without asking."),
+    force: bool = typer.Option(False, "--force", "--yes", "-y", help="Overwrite local changes without asking."),
     profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
     env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
 ):
@@ -606,7 +606,14 @@ def pull(
                         with open(file_path, "r") as f:
                             local_code = f.read()
                         if local_code != code:
-                            if not typer.confirm(f"Local changes detected in {file_name}. Overwrite?"):
+                            choice = typer.prompt(
+                                f"Local changes detected in {file_name}. Overwrite? [y/N/a] (a=all)",
+                                default="n"
+                            ).lower()
+                            
+                            if choice == 'a':
+                                force = True
+                            elif choice != 'y':
                                 console.print(f"Skipping {file_name}")
                                 continue
                     
