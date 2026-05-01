@@ -151,6 +151,38 @@ An array of date strings.
 
 ***
 
+## 🧪 Logic & Formulas
+
+### 1. Formula Field
+
+Formula fields are read-only, **virtual** fields that calculate their values on-the-fly whenever a record is fetched. They are not persisted in the database.
+
+* **Identification:** `is_formula: true`
+* **Syntax:** 
+    * Uses Mustache-style syntax for field references: `{{record.field_api_name}}`.
+    * Supports standard operators (`AND`, `OR`, `=`) as well as JS-style equivalents (`&&`, `||`, `==`).
+    * Keywords and logical operators are case-insensitive (`TRUE`, `true`, `and`, `AND`).
+* **Properties:**
+    * `formula`: The calculation string (e.g., `{{record.first_name}} & ' ' & {{record.last_name}}`).
+    *   `result_type`: Determines the final data type and formatting (`string`, `number`, `boolean`, `date`, `datetime`, `currency`, `percent`).
+    *   `virtual`: Always `true`.
+
+### 2. Rollup Summary Field
+
+Rollup summary fields are read-only, **virtual** fields that calculate aggregate values from related child records in real-time.
+
+* **Identification:** `is_rollup: true`
+* **Properties:**
+   * `rollup_target_object`: The API name of the child object to aggregate from (e.g., `quote_line_item`).
+    * `rollup_relationship_field`: The API name of the lookup field on the child object that points back to the current object.
+   * `rollup_type`: The aggregation method (`count`, `sum`, `avg`, `min`, `max`).
+   * `rollup_source_field`: The field on the child record to perform the calculation on (required for all types except `count`).
+   * `result_type`: Controls the final formatting. Usually inherits from the source field (e.g., `currency`).
+   * `virtual`: Always `true`.
+
+***
+
+
 ## 🛠️ Specialized Types
 
 ### 1. Phone
@@ -903,6 +935,57 @@ Below is a showing of all of the possible field types in side a JSON object. Thi
       "title": "Compound Lookup",
       "custom": false,
       "api_name": "compound_lookup"
+    },
+    "next_birthday_formula": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "format": "date",
+      "app": "b743cbd7-45db-4f5a-b0e9-a503c08f86e5",
+      "pii": false,
+      "phi": false,
+      "description": "Calculates the next occurrence of the birthday",
+      "help_text": "",
+      "plural_name": "Next Birthdays",
+      "title": "Next Birthday",
+      "is_formula": true,
+      "formula": "NEXT_BIRTHDAY({{record.birthday}})",
+      "result_type": "date",
+      "virtual": true,
+      "custom": true,
+      "api_name": "next_birthday_formula"
+    },
+    "total_quote_amount_rollup": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "format": "currency",
+      "app": "6eb51491-d7a8-43ea-971d-d4d5d7464043",
+      "pii": false,
+      "phi": false,
+      "description": "Calculates the total amount of all related line items",
+      "help_text": "",
+      "plural_name": "Total Quote Amounts",
+      "title": "Total Quote Amount",
+      "is_rollup": true,
+      "rollup_target_object": "quote_line_item",
+      "rollup_relationship_field": "quote",
+      "rollup_type": "sum",
+      "rollup_source_field": "amount",
+      "result_type": "currency",
+      "virtual": true,
+      "custom": true,
+      "api_name": "total_quote_amount_rollup"
     }
   },
   "relates_to_any_object": false,

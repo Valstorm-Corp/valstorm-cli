@@ -45,6 +45,10 @@ class RecordContext(BaseContext):
         """Delete one or more records."""
         pass
 
+    async def calculate_rollup(self, record_id: str, api_name: str, rollup_field_api_name: str) -> float:
+        """Dynamically calculate a rollup summary field for a specific record."""
+        pass
+
 class QueryContext(BaseContext):
     """Context for data querying (SQL, Mongo)."""
 
@@ -245,6 +249,19 @@ class UtilsContext(BaseContext):
     def dump_data(self, data: Any) -> Any:
         pass
 
+class FormulaContext(BaseContext):
+    """Context for formula evaluation."""
+
+    def calculate(self, formula: str, context: Dict[str, Any]) -> Any:
+        pass
+
+    async def evaluate_record(self, record: Dict[str, Any], schema_api_name: str) -> Dict[str, Any]:
+        """Evaluates all formula fields for a record based on its schema."""
+        pass
+
+class RollupContext(BaseContext):
+    rollup_service: RollupService = RollupService()
+
 class ExceptionContext(BaseContext):
     """Access to platform-specific exceptions."""
 
@@ -263,6 +280,7 @@ class PlatformContext:
         self.records: RecordContext = None
         self.query: QueryContext = None
         self.schemas: SchemaContext = None
+        self.formulas: FormulaContext = None
         self.tasks: TaskContext = None
         self.files: FileContext = None
         self.communications: CommunicationContext = None
@@ -272,6 +290,7 @@ class PlatformContext:
         self.agents: AgentContext = None
         self.utils: UtilsContext = None
         self.exceptions: ExceptionContext = None
+        self.rollups: RollupContext = None
 
     @property
     def models(self):

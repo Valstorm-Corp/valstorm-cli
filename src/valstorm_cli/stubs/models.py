@@ -120,7 +120,7 @@ class AssignmentPayload(BetterBaseModel):
     value: Any
 
 class ReturnPayload(BetterBaseModel):
-    output_type: Literal['default', 'custom', 'pure'] = 'default'
+    output_type: Literal['default', 'custom', 'custom_json', 'pure'] = 'default'
     status_code: int = 200
     content_type: str = 'application/json'
     content: Optional[Any] = None
