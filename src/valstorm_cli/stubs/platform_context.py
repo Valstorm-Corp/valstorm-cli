@@ -60,6 +60,10 @@ class QueryContext(BaseContext):
         """Execute a MongoDB aggregation pipeline."""
         pass
 
+    async def graphql(self, query: str, variables: Optional[dict]=None) -> dict:
+        """Execute a GraphQL query against the organization's dynamic schema."""
+        pass
+
     async def resolve_lookup(self, api_name: str, record_id: str) -> dict:
         """Resolves a record ID into a full lookup object."""
         pass
@@ -89,15 +93,28 @@ class TaskContext(BaseContext):
 class FileContext(BaseContext):
     """Context for file operations (S3)."""
 
-    async def upload(self, path: str, data: Any, **kwargs):
+    async def upload(self, filename: str, body: Any, content_type: str='application/octet-stream', is_binary: bool=True, public: bool=False, **kwargs):
         """Upload a file to storage."""
         pass
 
-    def delete_s3(self, location: str):
+    async def get_file(self, location: str):
+        """Retrieves a file from S3 and returns its content.
+Automatically scopes to the organization's folder."""
         pass
 
-    @property
-    def s3_client(self):
+    async def delete_s3(self, location: str):
+        """Deletes a file from S3.
+Automatically scopes to the organization's folder."""
+        pass
+
+    async def move_s3(self, source_location: str, destination_location: str, public: bool=False):
+        """Moves a file in S3.
+Automatically scopes both paths to the organization's folder."""
+        pass
+
+    async def update_acl(self, location: str, public: bool):
+        """Updates the ACL of an S3 file.
+Automatically scopes to the organization's folder."""
         pass
 
     @property
@@ -204,6 +221,26 @@ class GoogleContext(BaseContext):
         """Concurrently fetches file metadata for multiple IDs."""
         pass
 
+    async def export_drive_file(self, file_id: str, mime_type: str, base64_encode: bool=True, **kwargs):
+        pass
+
+    async def move_drive_file(self, file_id: str, target_folder_id: str):
+        """Moves a Google Drive file to a new target folder."""
+        pass
+
+    async def create_drive_folder(self, name: str, parent_id: str=None):
+        """Creates a new Google Drive folder."""
+        pass
+
+    async def upload_drive_file(self, file_name: str, file_content: bytes, mime_type: str, parent_id: str=None):
+        """Uploads a file to Google Drive."""
+        pass
+
+    async def get_drive_file_content(self, file_id: str):
+        """Returns the content of a Google Drive file.
+Automatically handles exporting Google Workspace documents to text/plain."""
+        pass
+
 class AgentContext(BaseContext):
     """Context for inter-agent communication."""
 
@@ -220,6 +257,14 @@ class MicrosoftContext(BaseContext):
 
     async def get_event_mapper(self):
         """Returns an initialized MicrosoftEventToEventMapper-like interface."""
+        pass
+
+    async def send_email(self, subject: str, to_recipients: list, body_content: str, is_html: bool=True, **kwargs):
+        """Send an email via Microsoft Graph API."""
+        pass
+
+    async def reply_to_email(self, message_id: str, comment: str, to_recipients: list=None):
+        """Reply to an existing email via Microsoft Graph API."""
         pass
 
 class IntegrationContext(BaseContext):
@@ -243,6 +288,9 @@ class UtilsContext(BaseContext):
     def get_phone_fields(self, schema: dict) -> List[str]:
         pass
 
+    def get_email_fields(self, schema: dict) -> List[str]:
+        pass
+
     async def html_to_md(self, html: str) -> str:
         pass
 
@@ -261,6 +309,10 @@ class FormulaContext(BaseContext):
 
 class RollupContext(BaseContext):
     rollup_service: RollupService = RollupService()
+
+    async def evaluate_rollups(self, records: List[Dict[str, Any]], schema: Dict[str, Any], **kwargs) -> List[Dict[str, Any]]:
+        """Evaluates rollup fields for a list of records based on the provided schema."""
+        pass
 
 class ExceptionContext(BaseContext):
     """Access to platform-specific exceptions."""

@@ -132,6 +132,15 @@ When you share a record with another user, you assign them a specific **Access L
 *   **Hierarchy Bypass**: Sharing a record grants access *across* or *up* the hierarchy. For example, a Sales Rep (`Personal` access) can share a specific Deal record with another Sales Rep on a different team, allowing them to collaborate on that one deal without exposing their entire pipeline.
 *   **Strict Enforcement**: Sharing permissions are strictly enforced. If a user is granted `Read` access via sharing, the system will actively block them from saving edits or deleting the record, even if their broader Object Permissions technically allow those actions. The sharing access level acts as a ceiling for that specific record.
 
+---
+
+## API Scopes
+In addition to the standard permissions and role hierarchy, API access is controlled through **API Scopes**. These scopes define what actions anyone can perform when interacting with the system. API Scopes are added to permissions. For example, you might have a permission set that grants `Read` access to the 'Contact' object, but if the API Scope for the endpoint to interact with objects is not included, then you won't be able to access that data through the API.
+
+These also work on Integrated Apps, which restrict down external applications and oauth connections to only the API Scopes assigned to that app. This allows you to safely integrate with third-party applications without worrying about overexposing your data.
+
+You can find every API Scope by calling a GET request to https://api.valstorm.com/v1/routes. This will return a list of all API endpoints and the scopes required to access them.
+
 -----
 
 ### Putting It All Together

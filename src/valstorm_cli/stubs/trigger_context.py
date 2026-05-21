@@ -79,7 +79,9 @@ class RecordTriggerContext:
         self.metadata: MetadataContext = None
         self.integrations: IntegrationContext = None
         self.utils: UtilsContext = None
-        self.utils = None
+        self.rollups: RollupContext = None
+        self.files = None
+        self.exceptions: ExceptionContext = None
         self.log = None
         self.new_map: Dict[str, Dict] = None
         self.old_map: Dict[str, Dict] = None

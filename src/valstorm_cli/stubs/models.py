@@ -351,6 +351,7 @@ class User(BetterBaseModel):
     modified_by: dict = {}
     created_date: Optional[datetime] = None
     modified_date: Optional[datetime] = None
+    owner: Optional[dict] = None
     email: EmailStr
     first_name: Optional[str] = None
     last_name: Optional[str] = None
@@ -375,7 +376,7 @@ class User(BetterBaseModel):
     availability: Optional[UserAvailability] = UserAvailability()
     integration_user: Optional[bool] = False
     is_impersonating: bool = False
-    scopes: List[str] = []
+    scopes: List[str] = Field(default_factory=list)
     license: Optional[UserLicense] = None
     ui_access: bool = True
     profile_picture: Optional[Image] = None
@@ -384,6 +385,8 @@ class User(BetterBaseModel):
     email_addresses: Optional[List[str]] = []
     mfa_required: bool = True
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
+    is_portal_user: bool = False
+    portal_id: Optional[str] = None
 
 class UserCreate(User):
     id: str = Field(default_factory=lambda: str(uuid4()))
@@ -438,6 +441,7 @@ class ObjectPermissions(BaseModel):
 class PermissionMap(BaseModel):
     model_config = ConfigDict(extra='allow')
     object_permissions: Dict[str, ObjectPermissions] = Field(default_factory=dict)
+    scopes: List[str] = []
 
 class Permission(StandardBase):
     model_config = ConfigDict(extra='allow')
@@ -445,6 +449,7 @@ class Permission(StandardBase):
     object_permissions: Optional[dict] = {}
     app: dict = {}
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
+    scopes: List[str] = []
 
 class StandardOwnership(StandardBase):
     owner: str = Field(default=None, json_schema_extra={'default': None, 'format': 'lookup', 'modify': False, 'schema': 'user', 'system': True, 'title': 'Owner', 'type': 'string', 'api_name': 'owner'})
@@ -476,7 +481,7 @@ class IntegratedApp(StandardBase):
     config: dict = {}
     git_tracking: bool = False
     use_config: bool = False
-    scopes: list = []
+    scopes: List[str] = Field(default_factory=list)
     internal: bool = False
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
@@ -491,6 +496,7 @@ class AuthCredential(StandardBase):
     data: dict = {}
     headers: Optional[dict] = {}
     api_key: Optional[str] = None
+    scopes: List[str] = []
 
 class Token(BetterBaseModel):
     access_token: str
@@ -526,7 +532,7 @@ class OauthRequestToken(BetterBaseModel):
     client_id: str
     client_secret: str
     grant_type: str
-    code: str
+    code: Optional[str] = None
     redirect_uri: str
     run_as: Optional[str] = None
 
@@ -715,6 +721,7 @@ class GmailSendRequest(BetterBaseModel):
     template_id: Optional[str] | Optional[dict] = None
     merge_data: Optional[Dict[str, Any]] = None
     attachments: Optional[List[str]] = None
+    thread_id: Optional[str] = None
 
     @field_validator('to', mode='before')
     @classmethod
@@ -850,6 +857,8 @@ class SendGridEmailRequest(BaseModel):
     mail_settings: Optional[SendGridMailSettings] = None
     tracking_settings: Optional[SendGridTrackingSettings] = None
     asm_settings: Optional[SendGridAsmSettings] = None
+    campaign: Optional[Lookup] = None
+    campaign_contact: Optional[Lookup] = None
 
     @field_validator('to_emails', 'cc', 'bcc', mode='before')
     @classmethod
