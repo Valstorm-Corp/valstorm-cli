@@ -12,6 +12,12 @@ ENVIRONMENTS = {
     "local": "http://localhost:8010"
 }
 
+WEB_ENVIRONMENTS = {
+    "prod": "https://app.valstorm.com",
+    "dev": "https://app-dev.valstorm.com",
+    "local": "http://localhost:3000"
+}
+
 def get_env() -> str:
     return os.environ.get("VALSTORM_ENV", "prod").lower()
 
@@ -21,6 +27,10 @@ def get_profile() -> str:
 def get_base_url(env: str = None) -> str:
     env = env or get_env()
     return ENVIRONMENTS.get(env, ENVIRONMENTS["prod"])
+
+def get_web_url(env: str = None) -> str:
+    env = env or get_env()
+    return WEB_ENVIRONMENTS.get(env, WEB_ENVIRONMENTS["prod"])
 
 def get_api_base_url(env: str = None) -> str:
     return f"{get_base_url(env)}/v1"
