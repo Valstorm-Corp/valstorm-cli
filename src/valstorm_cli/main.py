@@ -73,15 +73,12 @@ def list_profiles():
     active_profile = None
     active_env = None
     try:
-        current = Path.cwd()
-        while current != current.parent:
-            if (current / "valstorm.json").exists():
-                with open(current / "valstorm.json", "r") as f:
-                    config = json.load(f)
-                    active_profile = config.get("profile")
-                    active_env = config.get("env")
-                break
-            current = current.parent
+        root = find_project_root()
+        if root:
+            with open(root / "valstorm.json", "r") as f:
+                config = json.load(f)
+                active_profile = config.get("profile")
+                active_env = config.get("env")
     except Exception:
         pass
 
@@ -217,15 +214,14 @@ def get_pkce_pair():
 
 @app.command()
 def login(
-    profile: str = typer.Option(None, \"--profile\", \"-p\", help=\"Profile name to save these credentials under.\"),
+    profile: str = typer.Option(None, "--profile", "-p", help="Profile name to save these credentials under."),
     env: str = typer.Option(None, "--env", "-e", help="Target environment (local, dev, prod)."),
     use_password: bool = typer.Option(False, "--password", help="Use legacy password flow.")
 ):
-    \"\"\"
+    """
     Authenticate with Valstorm.
-    \"\"\"
+    """
     auth = get_auth(profile=profile, env=env)
-
     
     console.print(f"Logging in to [blue]{get_api_base_url(auth.env)}[/blue] (Profile: [cyan]{auth.profile}[/cyan])")
     
@@ -404,18 +400,17 @@ def update():
 @app.command()
 def sql_query(
     query: str = typer.Argument(..., help="The SQL query to execute."),
-    profile: str = typer.Option(None, \"--profile\", \"-p\", help=\"Profile name.\"),
+    profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
     env: str = typer.Option(None, "--env", "-e", help="Target environment."),
     output: str = typer.Option("table", "--output", "-o", help="Output format (table, json)."),
     bypass_cache: bool = typer.Option(False, "--bypass-cache", help="Bypass the query cache."),
     save: Optional[str] = typer.Option(None, "--save", "-s", help="Save results to a JSON file."),
     csv: Optional[str] = typer.Option(None, "--csv", help="Save results to a CSV file.")
 ):
-    \"\"\"
+    """
     Execute a SQL-like query against the Valstorm API.
-    \"\"\"
+    """
     auth = get_auth(profile=profile, env=env)
-
     
     if not auth.ensure_valid_token():
         console.print("[bold red]Not logged in or token expired.[/bold red] Please run `valstorm login`.")
@@ -497,14 +492,13 @@ def sql_query(
 
 @app.command()
 def open(
-    profile: str = typer.Option(None, \"--profile\", \"-p\", help=\"Profile name.\"),
+    profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
     env: str = typer.Option(None, "--env", "-e", help="Target environment.")
 ):
-    \"\"\"
+    """
     Open the Valstorm web application in your browser, pre-authenticated.
-    \"\"\"
+    """
     auth = get_auth(profile=profile, env=env)
-
     
     if not auth.ensure_valid_token():
         console.print("[bold red]Not logged in or token expired.[/bold red] Please run `valstorm login`.")
@@ -537,16 +531,15 @@ def open(
 
 @app.command()
 def whoami(
-    profile: str = typer.Option(None, \"--profile\", \"-p\", help=\"Profile name.\"),
-    env: str = typer.Option(None, \"--env\", \"-e\", help=\"Target environment.\")
+    profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: str = typer.Option(None, "--env", "-e", help="Target environment.")
 ):
-    \"\"\"
+    """
     Display current authenticated user info.
-    \"\"\"
+    """
     auth = get_auth(profile=profile, env=env)
-
+    
     if not auth.ensure_valid_token():
-
         console.print("[bold red]Not logged in or token expired.[/bold red] Please run `valstorm login`.")
         raise typer.Exit(1)
         
@@ -567,7 +560,7 @@ def whoami(
 @app.command()
 def init(
     path: str = typer.Argument(None, help="Name of the directory to initialize the project in."),
-    profile: str = typer.Option(None, \"--profile\", \"-p\", help=\"The auth profile to use.\"),
+    profile: str = typer.Option(None, "--profile", "-p", help="The auth profile to use."),
     env: str = typer.Option(None, "--env", "-e", help="The target environment.")
 ):
     """
@@ -708,11 +701,12 @@ Documentation for the platform, including permissions, query engine, and AI agen
 
     console.print(f"\n[bold green]🚀 Project initialized successfully in {target_path.absolute()}[/bold green]")
     console.print(f"Next steps:\n  1. [cyan]cd {target_path.name}[/cyan]\n  2. [cyan]uv sync[/cyan]\n  3. [cyan]valstorm pull && valstorm pull-schemas[/cyan]")
+
 def find_project_root() -> Optional[Path]:
-    \"\"\"Helper to find the valstorm.json file by searching upwards.\"\"\"
+    """Helper to find the valstorm.json file by searching upwards."""
     current = Path.cwd()
     while current != current.parent:
-        if (current / \"valstorm.json\").exists():
+        if (current / "valstorm.json").exists():
             return current
         current = current.parent
     return None
@@ -721,17 +715,17 @@ def get_project_root() -> Path:
     root = find_project_root()
     if root:
         return root
-    console.print(\"[bold red]Error:[/bold red] Could not find 'valstorm.json'. Are you in a Valstorm project directory?\")
+    console.print("[bold red]Error:[/bold red] Could not find 'valstorm.json'. Are you in a Valstorm project directory?")
     raise typer.Exit(1)
 
 def get_auth(profile: Optional[str] = None, env: Optional[str] = None) -> ValstormAuth:
-    \"\"\"
+    """
     Helper to resolve authentication using:
     1. Explicit command line arguments (if provided)
     2. Local project configuration (valstorm.json)
     3. Environment variables (handled by ValstormAuth)
     4. Defaults (handled by ValstormAuth)
-    \"\"\"
+    """
     auth_profile = profile
     auth_env = env
 
@@ -740,14 +734,13 @@ def get_auth(profile: Optional[str] = None, env: Optional[str] = None) -> Valsto
         try:
             config = load_config(root)
             if auth_profile is None:
-                auth_profile = config.get(\"profile\")
+                auth_profile = config.get("profile")
             if auth_env is None:
-                auth_env = config.get(\"env\")
+                auth_env = config.get("env")
         except Exception:
             pass
 
     return ValstormAuth(profile=auth_profile, env=auth_env)
-
 
 def load_config(root: Path) -> dict:
     with open(root / "valstorm.json", "r") as f:
@@ -932,7 +925,6 @@ def pull_schemas(
     """
     root = get_project_root()
     auth = get_auth(profile=profile, env=env)
-
     
     if not auth.ensure_valid_token():
         console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
@@ -986,7 +978,6 @@ def push(
     """
     root = get_project_root()
     auth = get_auth(profile=profile, env=env)
-
     
     if not auth.ensure_valid_token():
         console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
