@@ -1,14 +1,25 @@
 import typer
 import httpx
-from rich.console import Console
 import getpass
 import os
 import json
+import csv
 import shutil
 import subprocess
 import sys
+import webbrowser
+import secrets
+import hashlib
+import base64
+import threading
+import time
+from typing import Optional, Annotated
 from pathlib import Path
-from .auth import ValstormAuth, get_api_base_url
+from urllib.parse import urlencode, parse_qs, urlparse
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from .auth import ValstormAuth, get_api_base_url, get_base_url
+from rich.console import Console
+
 
 app = typer.Typer(help="Valstorm Developer CLI", no_args_is_help=True)
 mcp_app = typer.Typer(help="Manage the Valstorm MCP Server")
@@ -166,10 +177,49 @@ def status():
     except Exception as e:
         console.print(f"[bold red]UNEXPECTED ERROR:[/bold red] {e}")
 
+class OAuthCallbackHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        query = urlparse(self.path).query
+        params = parse_qs(query)
+        
+        code = params.get("code", [None])[0]
+        state = params.get("state", [None])[0]
+        
+        if code:
+            self.server.auth_code = code
+            self.server.state = state
+        
+        self.send_response(200)
+        self.send_header("Content-type", "text/html")
+        self.end_headers()
+        
+        message = """
+        <html>
+            <head><title>Authentication Successful</title></head>
+            <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
+                <h1 style="color: #4CAF50;">Authentication Successful!</h1>
+                <p>You can now close this tab and return to the terminal.</p>
+            </body>
+        </html>
+        """
+        self.wfile.write(message.encode("utf-8"))
+
+    def log_message(self, format, *args):
+        # Optional: Uncomment to see requests in terminal if still debugging
+        # console.print(f"[dim]Local server: {format % args}[/dim]")
+        return
+
+def get_pkce_pair():
+    verifier = secrets.token_urlsafe(32)
+    challenge_hash = hashlib.sha256(verifier.encode("utf-8")).digest()
+    challenge = base64.urlsafe_b64encode(challenge_hash).decode("utf-8").rstrip("=")
+    return verifier, challenge
+
 @app.command()
 def login(
     profile: str = typer.Option("default", "--profile", "-p", help="Profile name to save these credentials under."),
-    env: str = typer.Option(None, "--env", "-e", help="Target environment (local, dev, prod).")
+    env: str = typer.Option(None, "--env", "-e", help="Target environment (local, dev, prod)."),
+    use_password: bool = typer.Option(False, "--password", help="Use legacy password flow.")
 ):
     """
     Authenticate with Valstorm.
@@ -178,63 +228,140 @@ def login(
     
     console.print(f"Logging in to [blue]{get_api_base_url(auth.env)}[/blue] (Profile: [cyan]{auth.profile}[/cyan])")
     
-    email = typer.prompt("Email")
-    password = typer.prompt("Password", hide_input=True)
+    if use_password:
+        email = typer.prompt("Email")
+        password = typer.prompt("Password", hide_input=True)
 
-    with httpx.Client(base_url=get_api_base_url(auth.env)) as client:
-        # OAuth2 password flow uses form-urlencoded data
-        response = client.post("/oauth2/login", data={
-            "grant_type": "password",
-            "username": email,
-            "password": password
-        })
-
-        if response.status_code != 200:
-            console.print(f"[bold red]Login Failed:[/bold red] {response.status_code}")
-            console.print(response.text)
-            raise typer.Exit(1)
-
-        data = response.json()
-
-        # Handle 2FA if required
-        if "detail" in data and "2FA" in data["detail"]:
-            console.print(f"[yellow]{data['detail']}[/yellow]")
-            code = typer.prompt("Enter 2FA Code")
-            
-            verify_response = client.post("/oauth2/verify-2fa", json={
-                "email": email,
-                "code": code
+        with httpx.Client(base_url=get_api_base_url(auth.env)) as client:
+            # OAuth2 password flow uses form-urlencoded data
+            response = client.post("/oauth2/login", data={
+                "grant_type": "password",
+                "username": email,
+                "password": password
             })
-            
-            if verify_response.status_code != 200:
-                console.print(f"[bold red]2FA Verification Failed:[/bold red] {verify_response.text}")
-                raise typer.Exit(1)
-                
-            data = verify_response.json()
 
-        if "access_token" in data:
-            auth.save_tokens(
-                access_token=data["access_token"], 
-                refresh_token=data.get("refresh_token")
-            )
-            
-            # Fetch user details to save organization name for the profile list
-            with auth.get_client() as auth_client:
-                load_res = auth_client.get("/auth/load")
-                if load_res.status_code == 200:
-                    user_data = load_res.json()
-                    user = user_data.get("user", user_data) # handle both nested and unnested responses
-                    if user.get("organization_name"):
-                        auth.save_tokens(
-                            access_token=data["access_token"],
-                            refresh_token=data.get("refresh_token"),
-                            organization_name=user.get("organization_name")
-                        )
-                        
-            console.print("[bold green]Successfully logged in![/bold green]")
-        else:
-            console.print("[bold red]Unexpected response during login.[/bold red]")
-            console.print(data)
+            if response.status_code != 200:
+                console.print(f"[bold red]Login Failed:[/bold red] {response.status_code}")
+                console.print(response.text)
+                raise typer.Exit(1)
+
+            data = response.json()
+
+            # Handle 2FA if required
+            if "detail" in data and "2FA" in data["detail"]:
+                console.print(f"[yellow]{data['detail']}[/yellow]")
+                code = typer.prompt("Enter 2FA Code")
+                
+                verify_response = client.post("/oauth2/verify-2fa", json={
+                    "email": email,
+                    "code": code
+                })
+                
+                if verify_response.status_code != 200:
+                    console.print(f"[bold red]2FA Verification Failed:[/bold red] {verify_response.text}")
+                    raise typer.Exit(1)
+                    
+                data = verify_response.json()
+    else:
+        # OAuth Browser Flow
+        client_id = "valstorm-cli"
+        redirect_uri = "http://127.0.0.1:8011/callback"
+        port = 8011
+        
+        verifier, challenge = get_pkce_pair()
+        state = secrets.token_urlsafe(16)
+        
+        with httpx.Client(base_url=get_api_base_url(auth.env)) as client:
+            try:
+                # 1. Get Authorize URL from API
+                auth_res = client.post("/oauth2/authorize", json={
+                    "client_id": client_id,
+                    "redirect_uri": redirect_uri,
+                    "response_type": "code",
+                    "state": state,
+                    "code_challenge": challenge
+                })
+                
+                if auth_res.status_code != 200:
+                    console.print(f"[bold red]Authorization failed:[/bold red] {auth_res.text}")
+                    console.print("[yellow]Hint: Ensure you have an Integrated App with client_id 'valstorm-cli' and redirect_uri 'http://127.0.0.1:8011/callback' configured in your organization.[/yellow]")
+                    raise typer.Exit(1)
+                
+                authorize_url = auth_res.json()["redirect_url"]
+                
+                # 2. Start local server
+                server = HTTPServer(("127.0.0.1", port), OAuthCallbackHandler)
+                server.auth_code = None
+                server.state = None
+                
+                thread = threading.Thread(target=server.serve_forever)
+                thread.daemon = True
+                thread.start()
+                
+                console.print(f"Opening browser for authentication...")
+                webbrowser.open(authorize_url)
+                
+                console.print("[yellow]Waiting for authentication in browser...[/yellow]")
+                
+                while server.auth_code is None:
+                    try:
+                        time.sleep(0.5)
+                    except KeyboardInterrupt:
+                        server.shutdown()
+                        raise typer.Exit(1)
+                
+                auth_code = server.auth_code
+                received_state = server.state
+                server.shutdown()
+                
+                console.print("[green]✓ Received authentication code.[/green]")
+                
+                if received_state != state:
+                    console.print("[bold red]Error:[/bold red] State mismatch. Authentication failed.")
+                    raise typer.Exit(1)
+                
+                # 3. Exchange code for tokens
+                response = client.post("/oauth2/token", json={
+                    "grant_type": "authorization_code",
+                    "client_id": client_id,
+                    "code": auth_code,
+                    "redirect_uri": redirect_uri,
+                    "code_verifier": verifier
+                })
+                
+                if response.status_code != 200:
+                    console.print(f"[bold red]Token Exchange Failed:[/bold red] {response.status_code}")
+                    console.print(response.text)
+                    raise typer.Exit(1)
+                
+                data = response.json()
+            except httpx.RequestError as e:
+                console.print(f"[bold red]Connection Error:[/bold red] {e}")
+                raise typer.Exit(1)
+
+    if "access_token" in data:
+        auth.save_tokens(
+            access_token=data["access_token"], 
+            refresh_token=data.get("refresh_token")
+        )
+        
+        # Fetch user details to save organization name for the profile list
+        with auth.get_client() as auth_client:
+            load_res = auth_client.get("/auth/load")
+            if load_res.status_code == 200:
+                user_data = load_res.json()
+                user = user_data.get("user", user_data) # handle both nested and unnested responses
+                if user.get("organization_name"):
+                    auth.save_tokens(
+                        access_token=data["access_token"],
+                        refresh_token=data.get("refresh_token"),
+                        organization_name=user.get("organization_name")
+                    )
+                    
+        console.print("[bold green]Successfully logged in![/bold green]")
+    else:
+        console.print("[bold red]Unexpected response during login.[/bold red]")
+        console.print(data)
 
 @app.command()
 def update():
@@ -272,6 +399,99 @@ def update():
     except Exception as e:
         console.print(f"[bold red]An unexpected error occurred:[/bold red] {e}")
         raise typer.Exit(1)
+
+@app.command()
+def sql_query(
+    query: str = typer.Argument(..., help="The SQL query to execute."),
+    profile: str = typer.Option("default", "--profile", "-p", help="Profile name."),
+    env: str = typer.Option(None, "--env", "-e", help="Target environment."),
+    output: str = typer.Option("table", "--output", "-o", help="Output format (table, json)."),
+    bypass_cache: bool = typer.Option(False, "--bypass-cache", help="Bypass the query cache."),
+    save: Optional[str] = typer.Option(None, "--save", "-s", help="Save results to a JSON file."),
+    csv: Optional[str] = typer.Option(None, "--csv", help="Save results to a CSV file.")
+):
+    """
+    Execute a SQL-like query against the Valstorm API.
+    """
+    auth = ValstormAuth(profile=profile, env=env)
+    
+    if not auth.ensure_valid_token():
+        console.print("[bold red]Not logged in or token expired.[/bold red] Please run `valstorm login`.")
+        raise typer.Exit(1)
+        
+    with auth.get_client() as client:
+        try:
+            response = client.post("/query", json={
+                "query": query,
+                "bypass_cache": bypass_cache
+            })
+            
+            if response.status_code != 200:
+                console.print(f"[bold red]Query failed ({response.status_code}):[/bold red] {response.text}")
+                raise typer.Exit(1)
+                
+            data = response.json()
+            
+            # Save logic
+            if save:
+                with open(save, 'w') as f:
+                    json.dump(data, f, indent=4)
+                console.print(f"[green]✓ Results saved to {save}[/green]")
+                
+            if csv:
+                if isinstance(data, list) and len(data) > 0:
+                    import csv
+                    keys = data[0].keys()
+                    with open(csv, 'w', newline='') as f:
+                        dict_writer = csv.DictWriter(f, fieldnames=keys)
+                        dict_writer.writeheader()
+                        dict_writer.writerows(data)
+                    console.print(f"[green]✓ Results saved to {csv}[/green]")
+                elif isinstance(data, dict):
+                    import csv
+                    keys = data.keys()
+                    with open(csv, 'w', newline='') as f:
+                        dict_writer = csv.DictWriter(f, fieldnames=keys)
+                        dict_writer.writeheader()
+                        dict_writer.writerow(data)
+                    console.print(f"[green]✓ Results saved to {csv}[/green]")
+                else:
+                    console.print("[yellow]Cannot save non-list/dict data as CSV.[/yellow]")
+
+            if output == "json":
+                console.print_json(data=data)
+            else:
+                if not data:
+                    console.print("[yellow]No records found.[/yellow]")
+                    return
+                
+                from rich.table import Table
+                table = Table(show_header=True, header_style="bold magenta")
+                
+                # Get columns from first record
+                if isinstance(data, list) and len(data) > 0:
+                    columns = data[0].keys()
+                    for col in columns:
+                        table.add_column(col)
+                        
+                    for row in data:
+                        table.add_row(*[str(row.get(col, "")) for col in columns])
+                    
+                    console.print(table)
+                    console.print(f"\n[dim]Total records: {len(data)}[/dim]")
+                elif isinstance(data, dict):
+                    # Handle single record if applicable
+                    columns = data.keys()
+                    for col in columns:
+                        table.add_column(col)
+                    table.add_row(*[str(data.get(col, "")) for col in columns])
+                    console.print(table)
+                else:
+                    console.print(data)
+                    
+        except httpx.RequestError as e:
+            console.print(f"[bold red]Connection Error:[/bold red] {e}")
+            raise typer.Exit(1)
 
 @app.command()
 def whoami(

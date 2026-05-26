@@ -507,6 +507,7 @@ class TwoFAResponse(BetterBaseModel):
     detail: str = '2FA Required'
     two_fa_required: bool = True
     email: str
+    login_session_id: Optional[str] = None
 
 class Verify2FAPayload(BetterBaseModel):
     email: str
@@ -524,16 +525,18 @@ class AuthorizationCode(BetterBaseModel):
 class OauthCodeInput(BetterBaseModel):
     client_id: str
     state: Optional[str] = None
+    code_challenge: Optional[str] = None
 
 class CodeUrl(BetterBaseModel):
     code_url: str
 
 class OauthRequestToken(BetterBaseModel):
     client_id: str
-    client_secret: str
     grant_type: str
     code: Optional[str] = None
     redirect_uri: str
+    client_secret: Optional[str] = None
+    code_verifier: Optional[str] = None
     run_as: Optional[str] = None
 
 class OauthAuthorizeInput(BetterBaseModel):
@@ -781,6 +784,10 @@ class ScheduleTriggerSetting(BetterBaseModel):
 
 class AcceptedResponse(BetterBaseModel):
     detail: str
+
+class MagicCodeResponse(BetterBaseModel):
+    detail: str
+    login_session_id: Optional[str] = None
 
 class MagicCodeRequest(BetterBaseModel):
     email: str

@@ -11,6 +11,10 @@ class TriggerTransaction: pass
 class PlatformContext: pass
 class Request: pass
 
+import asyncio
+import inspect
+from functools import partial
+from typing import Callable, Any
 from datetime import datetime, timezone
 from typing import Optional, Annotated, Any, List, Dict, Union, Callable
 from fastapi import Depends, HTTPException, Request
@@ -291,6 +295,9 @@ class UtilsContext(BaseContext):
     def get_email_fields(self, schema: dict) -> List[str]:
         pass
 
+    def render_template(self, template_string: str, data: Dict[str, Any]) -> str:
+        pass
+
     async def html_to_md(self, html: str) -> str:
         pass
 
@@ -349,6 +356,14 @@ class PlatformContext:
         pass
 
     def log(self, message: str, level: str='info'):
+        pass
+
+    async def run_and_wait(self, func: Callable, *args, **kwargs) -> Any:
+        """Safely executes a function with error handling and logging."""
+        pass
+
+    async def run_task(self, func: Callable, *args, **kwargs) -> Any:
+        """Runs a function as a background task and returns the task ID."""
         pass
 
 async def get_platform_context(current_user: Annotated[User, Depends(get_current_user)]) -> PlatformContext:
