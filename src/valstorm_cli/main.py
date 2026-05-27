@@ -496,8 +496,8 @@ def sql_query(
             console.print(f"[bold red]Connection Error:[/bold red] {e}")
             raise typer.Exit(1)
 
-@app.command()
-def open(
+@app.command(name="open")
+def open_browser(
     profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
     env: str = typer.Option(None, "--env", "-e", help="Target environment.")
 ):
