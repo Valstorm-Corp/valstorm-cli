@@ -651,20 +651,37 @@ if __name__ == "__main__":
 
     # 4. Create a README
     with open(target_path / "README.md", "w") as f:
-        f.write(f"# Valstorm Project: {target_path.name}\n\nLocal development environment for Valstorm triggers, functions, and schemas.\n\n## Setup\n\n1. Install dependencies: `uv sync`\n2. Run MCP: `uv run run_mcp.py` or use Gemini CLI.\n3. Pull assets: `valstorm pull` and `valstorm pull-schemas`\n")
+        f.write(f"# Valstorm Project: {target_path.name}\n\nLocal development environment for Valstorm triggers, functions, and schemas.\n\n## Setup\n\n1. Install dependencies: `uv sync`\n2. Authenticate: `valstorm login`\n3. Pull assets: `valstorm pull` (objects + schemas)\n\nAfter step 1 the MCP server is launchable by AI assistants — no extra step needed.\n\n## AI Assistants\n\nThis project is pre-configured for:\n- **Claude Code** — `.mcp.json` registers the `valstorm` MCP server at the project root. `.claude/settings.json` ships a read-only permissions allowlist so common tools don't prompt on first use. See `CLAUDE.md`.\n- **Claude Desktop** — point it at `uv run run_mcp.py` from this directory.\n- **Gemini CLI** — `.gemini/settings.json` registers the same server. See `GEMINI.md`.\n")
 
     # 4.1 Create GEMINI.md for AI context
     with open(target_path / "GEMINI.md", "w") as f:
         f.write(f"""# Valstorm AI Context: {target_path.name}
 
-This project contains Valstorm platform development assets. 
-Documentation for the platform, including permissions, query engine, and AI agents, can be found in the `valstorm_platform/docs` directory.
+This project contains Valstorm platform development assets.
+Platform documentation (permissions, query engine, AI agents) lives in `valstorm_platform/docs/`.
+
+## Setup (do this first)
+
+```bash
+uv sync         # install deps into the project's .venv
+valstorm login  # authenticate (browser-based)
+valstorm pull   # pull existing objects/schemas
+```
+
+After `uv sync` the `valstorm` MCP server is launchable by Gemini CLI via
+`.gemini/settings.json`. If the tools don't appear, run `gemini mcp list`
+from this directory to inspect the server's launch status.
 
 ## Project Structure
 - `object/`: Local copies of record triggers and functions.
 - `schemas/`: Local copies of object schemas.
 - `valstorm_platform/`: Platform SDK stubs and documentation.
 - `valstorm_platform/docs/`: Comprehensive documentation for Valstorm.
+
+## Environment
+- **Env**: `{auth.env}`
+- **Profile**: `{auth.profile}`
+- **Auth tokens**: `~/.valstorm/auth_{auth.env}_{auth.profile}.json` (shared with CLI)
 """)
 
 
@@ -679,10 +696,11 @@ Documentation for the platform, including permissions, query engine, and AI agen
         "mcpServers": {
             "valstorm": {
                 "command": "uv",
-                "args": ["run", "run_mcp.py"],
+                "args": ["run", "--directory", ".", "python", "run_mcp.py"],
                 "env": {
                     "VALSTORM_ENV": auth.env,
-                    "VALSTORM_PROFILE": auth.profile
+                    "VALSTORM_PROFILE": auth.profile,
+                    "VIRTUAL_ENV": ""
                 }
             }
         },
@@ -705,8 +723,190 @@ Documentation for the platform, including permissions, query engine, and AI agen
         json.dump(gemini_settings, f, indent=4)
     console.print("[green]✓[/green] Gemini MCP settings bootstrapped.")
 
+    # 7. Bootstrap Claude Code MCP server — .mcp.json at project root.
+    # Claude Code reads .mcp.json (not .claude/settings.json) for repo-scoped MCP servers.
+    # VIRTUAL_ENV="" blocks an inherited shell venv from hijacking uv's lookup.
+    mcp_config = {
+        "mcpServers": {
+            "valstorm": {
+                "command": "uv",
+                "args": ["run", "--directory", ".", "python", "run_mcp.py"],
+                "env": {
+                    "VALSTORM_ENV": auth.env,
+                    "VALSTORM_PROFILE": auth.profile,
+                    "VIRTUAL_ENV": ""
+                }
+            }
+        }
+    }
+    with open(target_path / ".mcp.json", "w") as f:
+        json.dump(mcp_config, f, indent=4)
+    console.print("[green]✓[/green] Claude MCP server registered in .mcp.json.")
+
+    # 7b. Permissions allowlist so common read-only tools don't prompt on first use.
+    claude_dir = target_path / ".claude"
+    claude_dir.mkdir(exist_ok=True)
+    claude_settings = {
+        "permissions": {
+            "allow": [
+                "Bash(uv:*)",
+                "Bash(valstorm:*)",
+                "Bash(git status:*)",
+                "Bash(git diff:*)",
+                "Bash(git log:*)",
+                "mcp__valstorm__get_me",
+                "mcp__valstorm__get_status",
+                "mcp__valstorm__get_environment",
+                "mcp__valstorm__list_accounts",
+                "mcp__valstorm__list_schemas",
+                "mcp__valstorm__get_schema",
+                "mcp__valstorm__run_sql_query"
+            ]
+        }
+    }
+    with open(claude_dir / "settings.json", "w") as f:
+        json.dump(claude_settings, f, indent=4)
+    console.print("[green]✓[/green] Claude permissions allowlist bootstrapped.")
+
+    # 8. Create CLAUDE.md for AI context
+    with open(target_path / "CLAUDE.md", "w") as f:
+        f.write(f"""# Valstorm Project: {target_path.name}
+
+This is a local Valstorm SDK project for developing record triggers, functions, and schemas.
+Platform documentation is in `valstorm_platform/docs/`.
+
+## Setup (do this first)
+
+```bash
+# 1. Install dependencies into a project-local .venv
+uv sync
+
+# 2. Authenticate (opens a browser)
+valstorm login
+
+# 3. Pull existing objects/schemas from your org
+valstorm pull
+```
+
+After `uv sync`, Claude Code and Gemini CLI will be able to launch the
+Valstorm MCP server. Start a session in this directory and the `valstorm`
+MCP tools (e.g. `run_sql_query`, `get_me`) will appear.
+
+## Commands
+
+```bash
+# Pull remote objects/schemas to local filesystem
+valstorm pull
+valstorm pull-schemas
+
+# Push local changes to Valstorm cloud
+valstorm push
+
+# Run the MCP server manually (e.g. for Claude Desktop or debugging)
+uv run run_mcp.py
+```
+
+## Project Structure
+
+- `object/<ObjectName>/record_trigger/` — Python record trigger scripts
+- `object/<ObjectName>/function/` — Python function scripts
+- `schemas/` — Local copies of object schema definitions (JSON)
+- `valstorm_platform/` — Platform SDK stubs for IDE type hints and AI context
+- `valstorm_platform/docs/` — Comprehensive Valstorm platform documentation
+- `valstorm.json` — Project config (env, profile)
+- `run_mcp.py` — MCP server entry point
+
+## Writing Record Triggers
+
+Record triggers are Python scripts placed in `object/<ObjectName>/record_trigger/`.
+Import context from `valstorm_platform`:
+
+```python
+from valstorm_platform.trigger_context import TriggerContext
+
+def handler(context: TriggerContext):
+    record = context.record       # The record that triggered this
+    old_record = context.old      # Previous state (for update triggers)
+    db = context.db               # DB helper for querying related records
+    return record
+```
+
+## Writing Functions
+
+Functions are Python scripts placed in `object/<ObjectName>/function/`.
+
+```python
+from valstorm_platform.platform_context import PlatformContext
+
+def handler(context: PlatformContext):
+    payload = context.payload     # Input payload dict
+    db = context.db               # DB helper
+    return {{"result": "ok"}}
+```
+
+## MCP Tools Available
+
+The `valstorm` MCP server (via `run_mcp.py`) exposes these tools:
+
+**Auth**: `get_me`, `login`, `verify_2fa`, `refresh_auth`, `logout`, `switch_account`, `list_accounts`, `get_environment`
+
+**Records**: `create_records`, `update_records`, `delete_records`
+
+**Schemas**: `list_schemas`, `get_schema`, `create_schema`, `update_schema`, `delete_schema`, `create_field`, `update_field`, `delete_field`
+
+**Query**: `run_sql_query` — SQL-like queries with `ME`, `PHONE:`, and dynamic date keywords
+
+**Scaffolding**: `scaffold_valstorm_object` — creates a full object (schema + fields + permissions) in one call
+
+**OAuth**: `oauth_authorize`, `oauth_get_code`, `oauth_get_token`, `oauth_login_server`
+
+## SQL Query Syntax
+
+```sql
+SELECT field1, field2 FROM object_name WHERE condition ORDER BY field LIMIT n
+```
+
+Special keywords:
+- `ME` — current user (`WHERE owner = ME`)
+- `PHONE:` — search all phone fields
+- Dynamic dates: `today`, `yesterday`, `this_week`, `last_month`, `this_year`
+- Parameterized: `last_n_days:7`, `next_n_months:3`
+
+## Environment
+
+- **Env**: `{auth.env}`
+- **Profile**: `{auth.profile}`
+- **Config**: `valstorm.json`
+- **Auth tokens**: `~/.valstorm/auth_{auth.env}_{auth.profile}.json`
+
+## Troubleshooting
+
+**MCP tools don't appear in Claude Code.**
+On first launch in this directory Claude Code will prompt you to approve the
+project-scoped MCP server defined in `.mcp.json`. Approve it, then run
+`/mcp` to confirm the `valstorm` server is connected. If it shows as failed,
+run `claude mcp list` in this directory for the launch error.
+
+**"ModuleNotFoundError: valstorm_mcp" when the MCP starts.**
+Run `uv sync` — the project venv was never created or is out of date. The
+MCP config in `.mcp.json` sets `VIRTUAL_ENV=""` so uv uses *this* project's
+venv, not whatever venv your shell happens to have active.
+
+**Auth tokens expired.**
+Run `valstorm login` — both the CLI and the MCP server read tokens from
+`~/.valstorm/auth_{auth.env}_{auth.profile}.json`, so a single login covers both.
+""")
+    console.print("[green]✓[/green] CLAUDE.md created.")
+
     console.print(f"\n[bold green]🚀 Project initialized successfully in {target_path.absolute()}[/bold green]")
-    console.print(f"Next steps:\n  1. [cyan]cd {target_path.name}[/cyan]\n  2. [cyan]uv sync[/cyan]\n  3. [cyan]valstorm pull && valstorm pull-schemas[/cyan]")
+    console.print(
+        f"Next steps:\n"
+        f"  1. [cyan]cd {target_path.name}[/cyan]\n"
+        f"  2. [cyan]uv sync[/cyan]                            [dim](installs the project venv — required before MCP can launch)[/dim]\n"
+        f"  3. [cyan]valstorm login[/cyan]                     [dim](opens a browser)[/dim]\n"
+        f"  4. [cyan]valstorm pull && valstorm pull-schemas[/cyan]\n"
+        f"  5. Start Claude Code or Gemini CLI in this directory — the [bold]valstorm[/bold] MCP server is pre-wired."
+    )
 
 def find_project_root() -> Optional[Path]:
     """Helper to find the valstorm.json file by searching upwards."""
