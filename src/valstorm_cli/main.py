@@ -689,84 +689,9 @@ from this directory to inspect the server's launch status.
     with open(target_path / ".gitignore", "w") as f:
         f.write(".venv/\n__pycache__/\n*.pyc\n.env\nobject/**/*.json\n")
 
-    # 6. Bootstrap Gemini Settings
-    gemini_dir = target_path / ".gemini"
-    gemini_dir.mkdir(exist_ok=True)
-    gemini_settings = {
-        "mcpServers": {
-            "valstorm": {
-                "command": "uv",
-                "args": ["run", "--directory", ".", "python", "run_mcp.py"],
-                "env": {
-                    "VALSTORM_ENV": auth.env,
-                    "VALSTORM_PROFILE": auth.profile,
-                    "VIRTUAL_ENV": ""
-                }
-            }
-        },
-        "hooks": {
-            "SessionStart": [
-                {
-                    "matcher": ".*",
-                    "hooks": [
-                        {
-                            "name": "inject-docs",
-                            "type": "command",
-                            "command": "python3 valstorm_platform/hooks/inject_docs.py"
-                        }
-                    ]
-                }
-            ]
-        }
-    }
-    with open(gemini_dir / "settings.json", "w") as f:
-        json.dump(gemini_settings, f, indent=4)
-    console.print("[green]✓[/green] Gemini MCP settings bootstrapped.")
-
-    # 7. Bootstrap Claude Code MCP server — .mcp.json at project root.
-    # Claude Code reads .mcp.json (not .claude/settings.json) for repo-scoped MCP servers.
-    # VIRTUAL_ENV="" blocks an inherited shell venv from hijacking uv's lookup.
-    mcp_config = {
-        "mcpServers": {
-            "valstorm": {
-                "command": "uv",
-                "args": ["run", "--directory", ".", "python", "run_mcp.py"],
-                "env": {
-                    "VALSTORM_ENV": auth.env,
-                    "VALSTORM_PROFILE": auth.profile,
-                    "VIRTUAL_ENV": ""
-                }
-            }
-        }
-    }
-    with open(target_path / ".mcp.json", "w") as f:
-        json.dump(mcp_config, f, indent=4)
-    console.print("[green]✓[/green] Claude MCP server registered in .mcp.json.")
-
-    # 7b. Permissions allowlist so common read-only tools don't prompt on first use.
-    claude_dir = target_path / ".claude"
-    claude_dir.mkdir(exist_ok=True)
-    claude_settings = {
-        "permissions": {
-            "allow": [
-                "Bash(uv:*)",
-                "Bash(valstorm:*)",
-                "Bash(git status:*)",
-                "Bash(git diff:*)",
-                "Bash(git log:*)",
-                "mcp__valstorm__get_me",
-                "mcp__valstorm__get_status",
-                "mcp__valstorm__get_environment",
-                "mcp__valstorm__list_accounts",
-                "mcp__valstorm__list_schemas",
-                "mcp__valstorm__get_schema",
-                "mcp__valstorm__run_sql_query"
-            ]
-        }
-    }
-    with open(claude_dir / "settings.json", "w") as f:
-        json.dump(claude_settings, f, indent=4)
-    console.print("[green]✓[/green] Claude permissions allowlist bootstrapped.")
+    # 6/7. Bootstrap Claude + Gemini AI assistant configs (idempotent — same helper
+    # is reused by `valstorm update-stubs` to refresh existing projects).
+    _write_ai_configs(target_path, env=auth.env, profile=auth.profile)
 
     # 8. Create CLAUDE.md for AI context
     with open(target_path / "CLAUDE.md", "w") as f:
@@ -952,6 +877,124 @@ def load_config(root: Path) -> dict:
     with open(root / "valstorm.json", "r") as f:
         return json.load(f)
 
+DEFAULT_CLAUDE_PERMISSIONS = [
+    "Bash(uv:*)",
+    "Bash(valstorm:*)",
+    "Bash(git status:*)",
+    "Bash(git diff:*)",
+    "Bash(git log:*)",
+    "mcp__valstorm__get_me",
+    "mcp__valstorm__get_status",
+    "mcp__valstorm__get_environment",
+    "mcp__valstorm__list_accounts",
+    "mcp__valstorm__list_schemas",
+    "mcp__valstorm__get_schema",
+    "mcp__valstorm__run_sql_query",
+]
+
+DEFAULT_GEMINI_HOOKS = {
+    "SessionStart": [
+        {
+            "matcher": ".*",
+            "hooks": [
+                {
+                    "name": "inject-docs",
+                    "type": "command",
+                    "command": "python3 valstorm_platform/hooks/inject_docs.py",
+                }
+            ],
+        }
+    ]
+}
+
+
+def _build_mcp_server_config(env: str, profile: str) -> dict:
+    """The canonical launch spec for the valstorm MCP server.
+
+    - `--directory .` makes uv resolve the project root explicitly, robust to client cwd quirks.
+    - `VIRTUAL_ENV=""` blocks a parent shell's active venv from hijacking uv's lookup.
+    """
+    return {
+        "command": "uv",
+        "args": ["run", "--directory", ".", "python", "run_mcp.py"],
+        "env": {
+            "VALSTORM_ENV": env,
+            "VALSTORM_PROFILE": profile,
+            "VIRTUAL_ENV": "",
+        },
+    }
+
+
+def _load_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r") as f:
+            content = f.read().strip()
+            return json.loads(content) if content else {}
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+
+def _write_ai_configs(target_path: Path, env: str, profile: str, silent: bool = False):
+    """Idempotently write/refresh the Claude + Gemini bootstrap configs.
+
+    Merges into existing files rather than overwriting:
+    - `.mcp.json`: replaces only the `valstorm` server entry, preserves any other servers.
+    - `.claude/settings.json`: unions our default permissions allowlist with any existing entries.
+    - `.gemini/settings.json`: replaces only the `valstorm` mcpServers entry; adds the
+      inject-docs SessionStart hook only when `hooks` is absent (so user-customized hooks
+      are preserved).
+
+    Safe to re-run. Does NOT touch CLAUDE.md / GEMINI.md / README.md — those are owned
+    by the user after init.
+    """
+    server_config = _build_mcp_server_config(env, profile)
+
+    # 1. .mcp.json — Claude Code reads this for repo-scoped MCP servers.
+    mcp_path = target_path / ".mcp.json"
+    mcp_data = _load_json(mcp_path)
+    mcp_data.setdefault("mcpServers", {})
+    mcp_data["mcpServers"]["valstorm"] = server_config
+    with open(mcp_path, "w") as f:
+        json.dump(mcp_data, f, indent=4)
+
+    # 2. .claude/settings.json — union the permissions allowlist with existing entries.
+    claude_dir = target_path / ".claude"
+    claude_dir.mkdir(exist_ok=True)
+    claude_path = claude_dir / "settings.json"
+    claude_data = _load_json(claude_path)
+    permissions = claude_data.setdefault("permissions", {})
+    existing_allow = permissions.get("allow", [])
+    seen = set(existing_allow)
+    merged = list(existing_allow)
+    for perm in DEFAULT_CLAUDE_PERMISSIONS:
+        if perm not in seen:
+            merged.append(perm)
+            seen.add(perm)
+    permissions["allow"] = merged
+    with open(claude_path, "w") as f:
+        json.dump(claude_data, f, indent=4)
+
+    # 3. .gemini/settings.json — set our mcpServers entry; only seed hooks when absent.
+    gemini_dir = target_path / ".gemini"
+    gemini_dir.mkdir(exist_ok=True)
+    gemini_path = gemini_dir / "settings.json"
+    gemini_data = _load_json(gemini_path)
+    gemini_data.setdefault("mcpServers", {})
+    gemini_data["mcpServers"]["valstorm"] = server_config
+    if "hooks" not in gemini_data:
+        gemini_data["hooks"] = DEFAULT_GEMINI_HOOKS
+    with open(gemini_path, "w") as f:
+        json.dump(gemini_data, f, indent=4)
+
+    if not silent:
+        console.print(
+            "[green]✓[/green] AI assistant configs refreshed "
+            "([cyan].mcp.json[/cyan], [cyan].claude/settings.json[/cyan], [cyan].gemini/settings.json[/cyan])."
+        )
+
+
 def update_local_stubs(target_path: Path, silent: bool = False):
     """Copies all platform assets (stubs and documentation) from the CLI package to the project."""
     platform_dir = target_path / "valstorm_platform"
@@ -998,12 +1041,35 @@ def update_local_stubs(target_path: Path, silent: bool = False):
         console.print("[yellow]![/yellow] Warning: Could not find built-in platform assets to copy.")
 
 @app.command(name="update-stubs")
-def update_stubs_command():
+def update_stubs_command(
+    skip_configs: bool = typer.Option(False, "--skip-configs", help="Only refresh stubs/docs; skip AI assistant config refresh."),
+):
     """
-    Update the local PlatformContext stubs to the version bundled with the CLI.
+    Update local platform assets and AI assistant configs to the latest CLI version.
+
+    Refreshes:
+    - PlatformContext stubs and platform docs under `valstorm_platform/`.
+    - `.mcp.json` (Claude Code MCP server registration).
+    - `.claude/settings.json` permissions allowlist (merged — preserves your additions).
+    - `.gemini/settings.json` mcpServers entry (merged — preserves other servers).
+
+    Does NOT touch CLAUDE.md / GEMINI.md / README.md — those are yours to edit.
     """
     root = get_project_root()
     update_local_stubs(root)
+
+    if skip_configs:
+        return
+
+    try:
+        config = load_config(root)
+    except Exception as e:
+        console.print(f"[yellow]![/yellow] Could not read valstorm.json ({e}); skipping AI config refresh.")
+        return
+
+    env = config.get("env") or "prod"
+    profile = config.get("profile") or "default"
+    _write_ai_configs(root, env=env, profile=profile)
 
 @app.command()
 def pull(
