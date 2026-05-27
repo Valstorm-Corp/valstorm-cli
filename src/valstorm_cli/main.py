@@ -55,13 +55,16 @@ def list_profiles():
             profile = "_".join(name_parts[2:])
             
         try:
-            with open(path, "r") as f:
-                data = json.load(f)
+            content = path.read_text().strip()
+            if not content:
+                found.append({"env": env, "profile": profile, "org": "Empty file (Not logged in)"})
+                continue
+            data = json.loads(content)
             user = data.get("user", {})
             org_name = data.get("organization_name", "Unknown Org")
             found.append({"env": env, "profile": profile, "org": org_name, "user": user.get("name", "Unknown User"), "email": user.get("email", "Unknown Email"), "org_id": user.get("organization_id", "Unknown Org ID"), "user_id": user.get("id", "Unknown User ID")})
-        except Exception:
-            found.append({"env": env, "profile": profile, "org": "Invalid file"})
+        except Exception as e:
+            found.append({"env": env, "profile": profile, "org": f"Corrupted file ({str(e)})"})
 
     if not found:
         console.print("[yellow]No Valstorm profiles found. Please login first.[/yellow]")
@@ -298,18 +301,21 @@ def login(
                 console.print(f"Opening browser for authentication...")
                 webbrowser.open(authorize_url)
                 
-                console.print("[yellow]Waiting for authentication in browser...[/yellow]")
-                
+                # 3. Wait for code
                 while server.auth_code is None:
                     try:
-                        time.sleep(0.5)
+                        time.sleep(0.1)
                     except KeyboardInterrupt:
                         server.shutdown()
+                        server.server_close()
                         raise typer.Exit(1)
                 
                 auth_code = server.auth_code
                 received_state = server.state
+                
+                # Cleanup server immediately
                 server.shutdown()
+                server.server_close()
                 
                 console.print("[green]✓ Received authentication code.[/green]")
                 
@@ -1084,6 +1090,16 @@ def push(
         
         if not (creates_payload or updates_payload):
             console.print(f"No changes detected for [cyan]{file_type}[/cyan]s.")
+
+@app.command(name="version")
+def version():
+    """
+    Display the Valstorm CLI version from the package metadata.
+    """
+    data = open(Path(__file__).parent.parent.parent / "pyproject.toml", "r").read()
+    version_line = next((line for line in data.splitlines() if line.strip().startswith("version =")), None)
+    version = version_line.split("=")[1].strip().strip('"') if version_line else "Unknown"
+    console.print(f"Valstorm CLI version: [bold cyan]{version}[/bold cyan]")
 
 @mcp_app.command(name="start")
 def mcp_start():
