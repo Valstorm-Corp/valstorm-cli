@@ -25,17 +25,15 @@ class BaseContext:
     """Base class for all domain-specific contexts."""
 
     def __init__(self, platform: 'PlatformContext'):
-        pass
+        """Initialize the base context.
+
+Args:
+    platform (PlatformContext): The parent platform context."""
+        self.platform = None
+        self.user = None
 
 class RecordContext(BaseContext):
     """Context for record-related operations (CUD)."""
-
-    def UpdateOne(self, filter: Dict[str, Any], update: Dict[str, Any], upsert: bool=False):
-        pass
-
-    async def bulk_write(self, api_name: str, operations: List[Any], **kwargs):
-        """Perform a bulk write operation on a collection."""
-        pass
 
     async def create(self, api_name: str, input_data: Union[dict, list[dict]], async_run: bool=False, **kwargs):
         """Create one or more records."""
@@ -167,7 +165,8 @@ class CommunicationContext(BaseContext):
     """Context for communication operations (SMS, Email, Notifications)."""
 
     def __init__(self, platform: 'PlatformContext'):
-        pass
+        self.twilio: TwilioContext = None
+        self.notifications: NotificationContext = None
 
     async def send_sms(self, to_phone: str, message: str, **kwargs):
         """Send an SMS message via Twilio."""
@@ -275,7 +274,10 @@ class IntegrationContext(BaseContext):
     """Context grouping all external integrations."""
 
     def __init__(self, platform: 'PlatformContext'):
-        pass
+        """Initialize integration sub-contexts."""
+        self.salesforce: SalesforceContext = None
+        self.google: GoogleContext = None
+        self.microsoft: MicrosoftContext = None
 
 class UtilsContext(BaseContext):
     """General platform utilities."""

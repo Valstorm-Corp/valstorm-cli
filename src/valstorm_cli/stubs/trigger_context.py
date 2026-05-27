@@ -11,7 +11,7 @@ class TriggerTransaction: pass
 class PlatformContext: pass
 class Request: pass
 
-from .platform_context import PlatformContext, RecordContext, QueryContext, SchemaContext, CommunicationContext, WorkflowContext, MetadataContext, IntegrationContext, UtilsContext
+from .platform_context import BaseContext, RecordContext, QueryContext, SchemaContext, TaskContext, FileContext, TwilioContext, NotificationContext, CommunicationContext, WorkflowContext, MetadataContext, SalesforceContext, GoogleContext, AgentContext, MicrosoftContext, IntegrationContext, UtilsContext, FormulaContext, RollupContext, ExceptionContext, PlatformContext
 import time
 import contextvars
 from typing import Dict, List, Set, Optional, Any
