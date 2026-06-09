@@ -1357,6 +1357,149 @@ def push(
         if not (creates_payload or updates_payload):
             console.print(f"No changes detected for [cyan]{file_type}[/cyan]s.")
 
+def _extract_rich_text_values(node):
+    """
+    Recursively searches the node tree to find all RichText values in order.
+    """
+    if not isinstance(node, dict):
+        return []
+    
+    values = []
+    props = node.get("props", {})
+    if isinstance(props, dict):
+        if props.get("component_type") == "RichText" and "value" in props:
+            val = props["value"]
+            if val:
+                values.append(val)
+                
+    # Recurse children
+    children = node.get("children", [])
+    if isinstance(children, list):
+        for child in children:
+            values.extend(_extract_rich_text_values(child))
+            
+    return values
+
+def _format_frontmatter(metadata):
+    """
+    Formats metadata dictionary as YAML frontmatter.
+    """
+    lines = ["---"]
+    for k, v in metadata.items():
+        if v is not None:
+            # Safely encode values as JSON string for YAML compatibility
+            val_str = json.dumps(v, ensure_ascii=False)
+            lines.append(f"{k}: {val_str}")
+    lines.append("---")
+    return "\n".join(lines)
+
+@app.command(name="scaffold-web")
+def scaffold_web(
+    output_dir: Optional[str] = typer.Option(None, "--output-dir", "-o", help="Override the output base directory for scaffolded web pages.")
+):
+    """
+    Scaffold app pages (tagged Docs/Marketing) of type 'Web Page' into organized local Markdown files.
+    """
+    root = get_project_root()
+    metadata_path = root / "object" / "app_page" / "app_page_metadata.json"
+    output_base_dir = Path(output_dir) if output_dir else root / "web"
+    
+    if not metadata_path.exists():
+        console.print(f"[bold red]Error:[/bold red] Metadata file not found at {metadata_path}")
+        console.print("[yellow]Hint: Run 'valstorm pull' first to sync metadata records from the cloud.[/yellow]")
+        raise typer.Exit(1)
+        
+    try:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
+            records = json.load(f)
+    except Exception as e:
+        console.print(f"[bold red]Error parsing JSON from {metadata_path}:[/bold red] {e}")
+        raise typer.Exit(1)
+        
+    console.print(f"Loaded {len(records)} app page records.")
+    
+    scaffolded_count = 0
+    skipped_count = 0
+    tag_counts = {}
+    
+    for record in records:
+        rec_type = record.get("type")
+        rec_tag = record.get("tag")
+        
+        # Filter for type == "Web Page" and tag in ["Docs", "Marketing"] (case-insensitive)
+        if rec_type != "Web Page":
+            continue
+            
+        if not rec_tag or not isinstance(rec_tag, str) or rec_tag.lower() not in ["docs", "marketing"]:
+            continue
+            
+        slug = record.get("slug")
+        if not slug:
+            console.print(f"[yellow]Warning:[/yellow] Page '{record.get('name')}' (ID: {record.get('id')}) has tag '{rec_tag}' but no slug. Skipping.")
+            skipped_count += 1
+            continue
+            
+        slug = slug.strip("/")
+        
+        # Extract rich text content
+        content_values = []
+        data = record.get("data", [])
+        if isinstance(data, list):
+            for root_node in data:
+                content_values.extend(_extract_rich_text_values(root_node))
+                
+        markdown_body = "\n\n".join(content_values) if content_values else ""
+        
+        # Build metadata for frontmatter
+        metadata = {
+            "id": record.get("id"),
+            "name": record.get("name"),
+            "created_date": record.get("created_date"),
+            "modified_date": record.get("modified_date"),
+            "slug": record.get("slug"),
+            "tag": record.get("tag"),
+            "seo_title": record.get("seo_title"),
+            "seo_description": record.get("seo_description"),
+            "seo_keywords": record.get("seo_keywords"),
+            "canonical_url": record.get("canonical_url"),
+        }
+        
+        frontmatter = _format_frontmatter(metadata)
+        
+        # Combine frontmatter and markdown body
+        file_content = frontmatter
+        if markdown_body:
+            file_content += f"\n\n{markdown_body}\n"
+        else:
+            file_content += "\n"
+            
+        # Target file resolution
+        tag_folder = rec_tag.strip() if rec_tag else "Uncategorized"
+        target_file_path = output_base_dir / tag_folder / f"{slug}.md"
+        parent_dir = target_file_path.parent
+        
+        try:
+            parent_dir.mkdir(parents=True, exist_ok=True)
+            with open(target_file_path, "w", encoding="utf-8") as out_f:
+                out_f.write(file_content)
+                
+            scaffolded_count += 1
+            tag_counts[rec_tag] = tag_counts.get(rec_tag, 0) + 1
+            console.print(f"Scaffolded: \\\\[[cyan]{rec_tag}[/cyan]] '{record.get('name')}' -> [green]{tag_folder}/{slug}.md[/green]")
+        except Exception as e:
+            console.print(f"[bold red]Error writing to {target_file_path}:[/bold red] {e}")
+            
+    console.print("\n" + "="*50)
+    console.print("[bold green]SCAFFOLDING COMPLETED SUCCESSFULLY![/bold green]")
+    console.print("="*50)
+    console.print(f"Total Pages Processed: {scaffolded_count}")
+    for t, count in tag_counts.items():
+        console.print(f"  - {t}: {count} pages")
+    if skipped_count > 0:
+        console.print(f"Pages Skipped: {skipped_count}")
+    console.print(f"All markdown files written to: [blue]{output_base_dir}[/blue]")
+    console.print("="*50)
+
 @app.command(name="version")
 def version():
     """
