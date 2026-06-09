@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import urlencode, parse_qs, urlparse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from .auth import ValstormAuth, get_api_base_url, get_base_url, get_web_url
+from .scaffold import run_web_scaffolding, prepare_web_push
 from rich.console import Console
 
 
@@ -1357,42 +1358,6 @@ def push(
         if not (creates_payload or updates_payload):
             console.print(f"No changes detected for [cyan]{file_type}[/cyan]s.")
 
-def _extract_rich_text_values(node):
-    """
-    Recursively searches the node tree to find all RichText values in order.
-    """
-    if not isinstance(node, dict):
-        return []
-    
-    values = []
-    props = node.get("props", {})
-    if isinstance(props, dict):
-        if props.get("component_type") == "RichText" and "value" in props:
-            val = props["value"]
-            if val:
-                values.append(val)
-                
-    # Recurse children
-    children = node.get("children", [])
-    if isinstance(children, list):
-        for child in children:
-            values.extend(_extract_rich_text_values(child))
-            
-    return values
-
-def _format_frontmatter(metadata):
-    """
-    Formats metadata dictionary as YAML frontmatter.
-    """
-    lines = ["---"]
-    for k, v in metadata.items():
-        if v is not None:
-            # Safely encode values as JSON string for YAML compatibility
-            val_str = json.dumps(v, ensure_ascii=False)
-            lines.append(f"{k}: {val_str}")
-    lines.append("---")
-    return "\n".join(lines)
-
 @app.command(name="scaffold-web")
 def scaffold_web(
     output_dir: Optional[str] = typer.Option(None, "--output-dir", "-o", help="Override the output base directory for scaffolded web pages.")
@@ -1401,94 +1366,34 @@ def scaffold_web(
     Scaffold app pages (tagged Docs/Marketing) of type 'Web Page' into organized local Markdown files.
     """
     root = get_project_root()
-    metadata_path = root / "object" / "app_page" / "app_page_metadata.json"
     output_base_dir = Path(output_dir) if output_dir else root / "web"
     
-    if not metadata_path.exists():
-        console.print(f"[bold red]Error:[/bold red] Metadata file not found at {metadata_path}")
+    def progress_callback(event, **kwargs):
+        if event == "scaffold":
+            rec_tag = kwargs.get("tag")
+            record = kwargs.get("record")
+            tag_folder = kwargs.get("tag_folder")
+            slug = kwargs.get("slug")
+            console.print(f"Scaffolded: \\\\[[cyan]{rec_tag}[/cyan]] '{record.get('name')}' -> [green]{tag_folder}/{slug}.md[/green]")
+        elif event == "skip":
+            rec_tag = kwargs.get("tag")
+            record = kwargs.get("record")
+            console.print(f"[yellow]Warning:[/yellow] Page '{record.get('name')}' (ID: {record.get('id')}) has tag '{rec_tag}' but no slug. Skipping.")
+
+    try:
+        total_records, scaffolded_count, skipped_count, tag_counts = run_web_scaffolding(
+            root_path=root,
+            output_base_dir=output_base_dir,
+            progress_callback=progress_callback
+        )
+    except FileNotFoundError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
         console.print("[yellow]Hint: Run 'valstorm pull' first to sync metadata records from the cloud.[/yellow]")
         raise typer.Exit(1)
-        
-    try:
-        with open(metadata_path, 'r', encoding='utf-8') as f:
-            records = json.load(f)
-    except Exception as e:
-        console.print(f"[bold red]Error parsing JSON from {metadata_path}:[/bold red] {e}")
+    except ValueError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
         
-    console.print(f"Loaded {len(records)} app page records.")
-    
-    scaffolded_count = 0
-    skipped_count = 0
-    tag_counts = {}
-    
-    for record in records:
-        rec_type = record.get("type")
-        rec_tag = record.get("tag")
-        
-        # Filter for type == "Web Page" and tag in ["Docs", "Marketing"] (case-insensitive)
-        if rec_type != "Web Page":
-            continue
-            
-        if not rec_tag or not isinstance(rec_tag, str) or rec_tag.lower() not in ["docs", "marketing"]:
-            continue
-            
-        slug = record.get("slug")
-        if not slug:
-            console.print(f"[yellow]Warning:[/yellow] Page '{record.get('name')}' (ID: {record.get('id')}) has tag '{rec_tag}' but no slug. Skipping.")
-            skipped_count += 1
-            continue
-            
-        slug = slug.strip("/")
-        
-        # Extract rich text content
-        content_values = []
-        data = record.get("data", [])
-        if isinstance(data, list):
-            for root_node in data:
-                content_values.extend(_extract_rich_text_values(root_node))
-                
-        markdown_body = "\n\n".join(content_values) if content_values else ""
-        
-        # Build metadata for frontmatter
-        metadata = {
-            "id": record.get("id"),
-            "name": record.get("name"),
-            "created_date": record.get("created_date"),
-            "modified_date": record.get("modified_date"),
-            "slug": record.get("slug"),
-            "tag": record.get("tag"),
-            "seo_title": record.get("seo_title"),
-            "seo_description": record.get("seo_description"),
-            "seo_keywords": record.get("seo_keywords"),
-            "canonical_url": record.get("canonical_url"),
-        }
-        
-        frontmatter = _format_frontmatter(metadata)
-        
-        # Combine frontmatter and markdown body
-        file_content = frontmatter
-        if markdown_body:
-            file_content += f"\n\n{markdown_body}\n"
-        else:
-            file_content += "\n"
-            
-        # Target file resolution
-        tag_folder = rec_tag.strip() if rec_tag else "Uncategorized"
-        target_file_path = output_base_dir / tag_folder / f"{slug}.md"
-        parent_dir = target_file_path.parent
-        
-        try:
-            parent_dir.mkdir(parents=True, exist_ok=True)
-            with open(target_file_path, "w", encoding="utf-8") as out_f:
-                out_f.write(file_content)
-                
-            scaffolded_count += 1
-            tag_counts[rec_tag] = tag_counts.get(rec_tag, 0) + 1
-            console.print(f"Scaffolded: \\\\[[cyan]{rec_tag}[/cyan]] '{record.get('name')}' -> [green]{tag_folder}/{slug}.md[/green]")
-        except Exception as e:
-            console.print(f"[bold red]Error writing to {target_file_path}:[/bold red] {e}")
-            
     console.print("\n" + "="*50)
     console.print("[bold green]SCAFFOLDING COMPLETED SUCCESSFULLY![/bold green]")
     console.print("="*50)
@@ -1499,6 +1404,96 @@ def scaffold_web(
         console.print(f"Pages Skipped: {skipped_count}")
     console.print(f"All markdown files written to: [blue]{output_base_dir}[/blue]")
     console.print("="*50)
+
+@app.command(name="push-web")
+def push_web(
+    output_dir: Optional[str] = typer.Option(None, "--output-dir", "-o", help="Override the output base directory for scaffolded web pages."),
+    profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
+):
+    """
+    Push local web pages (markdown documents with YAML frontmatter) from the web folder back to the Valstorm cloud.
+    """
+    root = get_project_root()
+    output_base_dir = Path(output_dir) if output_dir else root / "web"
+    metadata_path = root / "object" / "app_page" / "app_page_metadata.json"
+    
+    auth = get_auth(profile=profile, env=env)
+    if not auth.ensure_valid_token():
+        console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
+        raise typer.Exit(1)
+        
+    if not output_base_dir.exists():
+        console.print(f"[bold red]Error:[/bold red] Local web folder not found at {output_base_dir}")
+        raise typer.Exit(1)
+        
+    console.print(f"Scanning local web pages in [blue]{output_base_dir}[/blue]...")
+    
+    try:
+        creates_payload, updates_payload, merged_metadata = prepare_web_push(
+            root_path=root,
+            output_base_dir=output_base_dir
+        )
+    except ValueError as e:
+        console.print(f"[bold red]Error preparing push:[/bold red] {e}")
+        raise typer.Exit(1)
+        
+    if not creates_payload and not updates_payload:
+        console.print("[yellow]No local changes or new files detected in the web folder.[/yellow]")
+        return
+        
+    console.print(f"Found [green]{len(creates_payload)} new pages[/green] to create and [cyan]{len(updates_payload)} pages[/cyan] to update.")
+    
+    if not typer.confirm("Do you want to push these changes to the cloud?"):
+        console.print("[yellow]Push cancelled.[/yellow]")
+        return
+        
+    # 1. Handle Creates
+    if creates_payload:
+        console.print(f"Creating {len(creates_payload)} new pages on [blue]{get_api_base_url(auth.env)}[/blue]...")
+        with auth.get_client() as client:
+            response = client.post("/object/app_page", json=creates_payload)
+            if response.status_code in [200, 201]:
+                console.print("[bold green]✓ Successfully created new app pages.[/bold green]")
+                newly_created = response.json() if isinstance(response.json(), list) else [response.json()]
+                
+                created_map = {r["slug"]: r for r in newly_created if r.get("slug")}
+                for i, r in enumerate(merged_metadata):
+                    if r.get("slug") in created_map:
+                        merged_metadata[i] = created_map[r["slug"]]
+            else:
+                console.print(f"[bold red]Create failed:[/bold red] {response.status_code}")
+                console.print(response.text)
+                raise typer.Exit(1)
+                
+    # 2. Handle Updates
+    if updates_payload:
+        console.print(f"Updating {len(updates_payload)} existing pages on [blue]{get_api_base_url(auth.env)}[/blue]...")
+        with auth.get_client() as client:
+            response = client.patch("/object/app_page", json=updates_payload)
+            if response.status_code in [200, 204]:
+                console.print("[bold green]✓ Successfully updated existing app pages.[/bold green]")
+                if response.status_code == 200:
+                    updated_records = response.json() if isinstance(response.json(), list) else [response.json()]
+                    updated_map = {r["id"]: r for r in updated_records if r.get("id")}
+                    for i, r in enumerate(merged_metadata):
+                        if r.get("id") in updated_map:
+                            merged_metadata[i] = updated_map[r["id"]]
+            else:
+                console.print(f"[bold red]Update failed:[/bold red] {response.status_code}")
+                console.print(response.text)
+                raise typer.Exit(1)
+                
+    # Save the updated merged metadata JSON back to disk
+    try:
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump(merged_metadata, f, indent=4)
+        console.print(f"[green]✓ Saved updated local metadata mapping to {metadata_path}[/green]")
+    except Exception as e:
+        console.print(f"[bold red]Error saving local metadata file:[/bold red] {e}")
+        
+    console.print("[bold green]✓ Push completed successfully![/bold green]")
 
 @app.command(name="version")
 def version():
