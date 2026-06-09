@@ -149,6 +149,13 @@ An array of date strings.
 * **Type:** `list`
 * **Format:** `date_list`
 
+### 4. Timezone
+
+A string representing a standard IANA timezone identifier (e.g., `America/New_York`). Rendered as a friendly dropdown with UTC offsets.
+
+* **Type:** `string`
+* **Format:** `timezone`
+
 ***
 
 ## 🧪 Logic & Formulas

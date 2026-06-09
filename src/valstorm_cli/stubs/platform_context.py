@@ -244,6 +244,14 @@ class GoogleContext(BaseContext):
 Automatically handles exporting Google Workspace documents to text/plain."""
         pass
 
+    async def modify_gmail_labels(self, message_id: str, add_label_ids: list[str]=None, remove_label_ids: list[str]=None):
+        """Modifies the labels on the specified Gmail message."""
+        pass
+
+    async def modify_gmail_thread_labels(self, thread_id: str, add_label_ids: list[str]=None, remove_label_ids: list[str]=None):
+        """Modifies the labels on the specified Gmail thread."""
+        pass
+
 class AgentContext(BaseContext):
     """Context for inter-agent communication."""
 
@@ -300,7 +308,15 @@ class UtilsContext(BaseContext):
     def render_template(self, template_string: str, data: Dict[str, Any]) -> str:
         pass
 
-    async def html_to_md(self, html: str) -> str:
+    async def html_to_md(self, html: str, strip_tags: Optional[List[str]]=None) -> str:
+        """Converts HTML to Markdown."""
+        pass
+
+    async def md_to_html(self, md: str) -> str:
+        """Converts Markdown to HTML."""
+        pass
+
+    def clean_html(self, html: str) -> str:
         pass
 
     def dump_data(self, data: Any) -> Any:

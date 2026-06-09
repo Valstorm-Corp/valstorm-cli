@@ -28,12 +28,12 @@ cd cli
 uv run valstorm status
 ```
 
-## Local Installation (Optional)
+## Installation
 
-If you want the `valstorm` command to be available globally in your terminal without using `uv run`, you can install it in editable mode:
+To install the `valstorm` command globally, use `uv tool install` directly from GitHub:
 
 ```bash
-uv tool install --editable cli/
+uv tool install git+https://github.com/Valstorm-Corp/valstorm-cli
 ```
 
 Now you can just run:
