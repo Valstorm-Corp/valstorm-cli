@@ -1525,10 +1525,41 @@ def main():
     """
     pass
 
-valstorm_app = typer.Typer(help="Manage Valstorm apps.")
-app.add_typer(valstorm_app, name="app")
+deploy_app = typer.Typer(help="Manage deployments.")
+deploy_app_group = typer.Typer(help="Manage App deployments.")
+deploy_app.add_typer(deploy_app_group, name="app")
+app.add_typer(deploy_app, name="deploy")
 
-@valstorm_app.command(name="push")
+def get_app_id_by_name(auth, api_base_url, app_name: str) -> str:
+    """Helper to lookup an app ID by its name."""
+    response = httpx.get(
+        f"{api_base_url}/app",
+        headers={"Authorization": f"Bearer {auth.access_token}"},
+        timeout=10.0
+    )
+    if response.status_code != 200:
+        console.print(f"[bold red]Failed to fetch apps:[/bold red] {response.text}")
+        raise typer.Exit(1)
+        
+    apps = response.json()
+    # Handle both list and paginated dict response formats
+    apps_list = apps if isinstance(apps, list) else apps.get("items", apps.get("data", []))
+    if not isinstance(apps_list, list):
+        # Fallback if the response shape is unusual
+        if isinstance(apps, dict) and "records" in apps:
+            apps_list = apps["records"]
+        else:
+            apps_list = []
+            
+    for a in apps_list:
+        if isinstance(a, dict) and a.get("name") == app_name:
+            return a.get("id")
+            
+    console.print(f"[bold red]App not found:[/bold red] {app_name}")
+    raise typer.Exit(1)
+
+
+@deploy_app_group.command(name="sandbox")
 def push_sandbox_app(
     sandbox_name: str = typer.Argument(..., help="The name of the sandbox environment."),
     app_name: str = typer.Argument(..., help="The name of the application being pushed."),
@@ -1583,6 +1614,117 @@ def push_sandbox_app(
             
     except Exception as e:
         console.print(f"[bold red]Error connecting to API:[/bold red] {str(e)}")
+        raise typer.Exit(1)
+
+
+@deploy_app_group.command(name="marketplace")
+def deploy_marketplace(
+    app_name: str = typer.Argument(..., help="The name of the application being deployed."),
+    profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
+):
+    """
+    Deploy the current app state to the Marketplace (Base database).
+    """
+    auth = get_auth(profile=profile, env=env)
+    if not auth.ensure_valid_token():
+        console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
+        raise typer.Exit(1)
+        
+    api_base_url = get_api_base_url(env=env)
+    app_id = get_app_id_by_name(auth, api_base_url, app_name)
+    
+    url = f"{api_base_url}/apps/marketplace-deployment"
+    console.print(f"Deploying app [blue]{app_name}[/blue] ({app_id}) to Marketplace...")
+    
+    response = httpx.post(
+        url,
+        json={"id": app_id},
+        headers={"Authorization": f"Bearer {auth.access_token}"},
+        timeout=120.0
+    )
+    if response.status_code == 200:
+        console.print("[bold green]✓ Marketplace deployment successful![/bold green]")
+        try:
+            from rich.json import JSON
+            console.print(JSON.from_data(response.json()))
+        except Exception:
+            console.print(response.text)
+    else:
+        console.print(f"[bold red]Deployment failed ({response.status_code}):[/bold red] {response.text}")
+        raise typer.Exit(1)
+
+@deploy_app_group.command(name="next-env")
+def deploy_next_env(
+    app_name: str = typer.Argument(..., help="The name of the application being deployed."),
+    profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
+):
+    """
+    Deploy the app to the next environment.
+    """
+    auth = get_auth(profile=profile, env=env)
+    if not auth.ensure_valid_token():
+        console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
+        raise typer.Exit(1)
+        
+    api_base_url = get_api_base_url(env=env)
+    app_id = get_app_id_by_name(auth, api_base_url, app_name)
+    
+    url = f"{api_base_url}/apps/deploy/{app_id}"
+    console.print(f"Deploying app [blue]{app_name}[/blue] ({app_id}) to the next environment...")
+    
+    response = httpx.get(
+        url,
+        headers={"Authorization": f"Bearer {auth.access_token}"},
+        timeout=120.0
+    )
+    if response.status_code == 200:
+        console.print("[bold green]✓ Next-env deployment successful![/bold green]")
+        try:
+            from rich.json import JSON
+            console.print(JSON.from_data(response.json()))
+        except Exception:
+            console.print(response.text)
+    else:
+        console.print(f"[bold red]Deployment failed ({response.status_code}):[/bold red] {response.text}")
+        raise typer.Exit(1)
+
+@deploy_app_group.command(name="apply-subscribers")
+def apply_subscribers(
+    app_name: str = typer.Argument(..., help="The name of the application being applied."),
+    profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
+):
+    """
+    Apply app updates to all subscribers.
+    """
+    auth = get_auth(profile=profile, env=env)
+    if not auth.ensure_valid_token():
+        console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
+        raise typer.Exit(1)
+        
+    api_base_url = get_api_base_url(env=env)
+    app_id = get_app_id_by_name(auth, api_base_url, app_name)
+    
+    url = f"{api_base_url}/apps/app-update-subscribers"
+    console.print(f"Applying updates for app [blue]{app_name}[/blue] ({app_id}) to subscribers...")
+    
+    response = httpx.post(
+        url,
+        json={"id": app_id},
+        headers={"Authorization": f"Bearer {auth.access_token}"},
+        timeout=120.0
+    )
+    if response.status_code == 200:
+        console.print("[bold green]✓ Updates applied to subscribers![/bold green]")
+        try:
+            from rich.json import JSON
+            console.print(JSON.from_data(response.json()))
+        except Exception:
+            console.print(response.text)
+    else:
+        console.print(f"[bold red]Apply failed ({response.status_code}):[/bold red] {response.text}")
         raise typer.Exit(1)
 
 if __name__ == "__main__":
