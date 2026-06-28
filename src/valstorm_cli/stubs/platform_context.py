@@ -138,7 +138,7 @@ class TwilioContext(BaseContext):
         """Create, update, or delete a Twilio application."""
         pass
 
-    async def get_session(self, type: str='user', **kwargs):
+    async def _get_session(self, type: str='user', **kwargs):
         """Returns an authenticated Twilio session.
 type: 'user' or 'phone'"""
         pass
@@ -216,7 +216,7 @@ class SalesforceContext(BaseContext):
 class GoogleContext(BaseContext):
     """Context for Google Workspace operations."""
 
-    async def get_workspace(self, **kwargs):
+    async def _get_workspace(self, **kwargs):
         """Returns an initialized GoogleWorkspace instance."""
         pass
 
@@ -277,6 +277,7 @@ class MicrosoftContext(BaseContext):
     async def reply_to_email(self, message_id: str, comment: str, to_recipients: list=None):
         """Reply to an existing email via Microsoft Graph API."""
         pass
+from .stripe_context import StripeContext
 
 class IntegrationContext(BaseContext):
     """Context grouping all external integrations."""
@@ -286,6 +287,7 @@ class IntegrationContext(BaseContext):
         self.salesforce: SalesforceContext = None
         self.google: GoogleContext = None
         self.microsoft: MicrosoftContext = None
+        self.stripe: StripeContext = None
 
 class UtilsContext(BaseContext):
     """General platform utilities."""
@@ -345,6 +347,7 @@ class ExceptionContext(BaseContext):
     @property
     def S3ClientError(self):
         pass
+from .parser_context import ParserContext
 
 class PlatformContext:
     """
@@ -368,6 +371,7 @@ class PlatformContext:
         self.utils: UtilsContext = None
         self.exceptions: ExceptionContext = None
         self.rollups: RollupContext = None
+        self.parser: ParserContext = None
 
     @property
     def models(self):

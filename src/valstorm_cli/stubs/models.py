@@ -331,7 +331,7 @@ class LicenseFeature(str, Enum):
     LIVE_CHAT = 'live_chat'
 
 class UserLicense(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=lambda : str(uuid4()))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     created_by: dict = {}
@@ -389,11 +389,11 @@ class User(BetterBaseModel):
     portal_id: Optional[str] = None
 
 class UserCreate(User):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=lambda : str(uuid4()))
     password: str
 
 class OrganizationBase(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=lambda : str(uuid4()))
     name: str
     created_date: Optional[str] = datetime.now().isoformat()
     modified_date: Optional[str] = datetime.now().isoformat()
@@ -416,7 +416,7 @@ class Organization(OrganizationBase):
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
 
 class StandardBase(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=lambda : str(uuid4()))
     name: str
     created_date: datetime
     modified_date: datetime
@@ -456,7 +456,7 @@ class StandardOwnership(StandardBase):
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
 
 class App(StandardBase):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=lambda : str(uuid4()))
     name: str
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
@@ -558,7 +558,7 @@ class SendNotificationSetting(BetterBaseModel):
     data: dict = {}
 
 class NotificationSubscriber(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=lambda : str(uuid4()))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     created_by: SystemLookup | UserLookup | Lookup
@@ -571,7 +571,7 @@ class NotificationSubscriber(BetterBaseModel):
     object: Optional[Lookup] = None
 
 class NotificationSetting(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=lambda : str(uuid4()))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     created_by: SystemLookup | UserLookup | Lookup
@@ -604,7 +604,7 @@ class NotificationSetting(BetterBaseModel):
     push_to_web: bool = False
 
 class Notification(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=lambda : str(uuid4()))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     created_by: SystemLookup | UserLookup | Lookup = SystemLookup()
@@ -732,7 +732,7 @@ class GmailSendRequest(BetterBaseModel):
         pass
 
 class Log(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=lambda : str(uuid4()))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     created_by: UserLookup
@@ -769,7 +769,7 @@ class BulkSend(BetterBaseModel):
     automation: Optional[str] = None
 
 class ScheduleTriggerSetting(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=lambda : str(uuid4()))
     name: str
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
@@ -897,7 +897,7 @@ class TwilioSMS(BaseModel):
     campaign_id: Optional[str] = None
 
 class Function(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=lambda : str(uuid4()))
     name: str
     created_date: datetime = Field(default_factory=datetime.utcnow)
     modified_date: datetime = Field(default_factory=datetime.utcnow)

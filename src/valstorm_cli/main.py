@@ -666,7 +666,7 @@ Platform documentation (permissions, query engine, AI agents) lives in `valstorm
 ```bash
 uv sync         # install deps into the project's .venv
 valstorm login  # authenticate (browser-based)
-valstorm pull   # pull existing objects/schemas
+valstorm pull   # pull existing objects/schema
 ```
 
 After `uv sync` the `valstorm` MCP server is launchable by Gemini CLI via
@@ -710,7 +710,7 @@ uv sync
 # 2. Authenticate (opens a browser)
 valstorm login
 
-# 3. Pull existing objects/schemas from your org
+# 3. Pull existing objects/schema from your org
 valstorm pull
 ```
 
@@ -721,7 +721,7 @@ MCP tools (e.g. `run_sql_query`, `get_me`) will appear.
 ## Commands
 
 ```bash
-# Pull remote objects/schemas to local filesystem
+# Pull remote objects/schema to local filesystem
 valstorm pull
 valstorm pull-schemas
 
@@ -1095,7 +1095,7 @@ def pull(
 
     # 1. Fetch available schemas to see what we can pull
     with auth.get_client() as client:
-        schema_res = client.get("/schemas")
+        schema_res = client.get("/schema")
         if schema_res.status_code != 200:
             console.print("[bold red]Failed to fetch schemas.[/bold red]")
             raise typer.Exit(1)
@@ -1208,8 +1208,8 @@ def pull_schemas(
     with auth.get_client() as client:
         # If specific object requested, use the specific endpoint if it's more efficient, 
         # but the current logic fetches all and filters. 
-        # Actually /schemas returns everything, let's keep it simple for now or check if /schema/{object} is better.
-        endpoint = f"/schema/{object_type}" if object_type else "/schemas"
+        # Actually /schema returns everything, let's keep it simple for now or check if /schema/{object} is better.
+        endpoint = f"/schema/{object_type}" if object_type else "/schema"
         response = client.get(endpoint)
         
         if response.status_code != 200:
@@ -1525,5 +1525,67 @@ def main():
     """
     pass
 
+valstorm_app = typer.Typer(help="Manage Valstorm apps.")
+app.add_typer(valstorm_app, name="app")
+
+@valstorm_app.command(name="push")
+def push_sandbox_app(
+    sandbox_name: str = typer.Argument(..., help="The name of the sandbox environment."),
+    app_name: str = typer.Argument(..., help="The name of the application being pushed."),
+    target: Optional[str] = typer.Option(None, "--target", "-t", help="Optional target destination for the deployment (e.g., 'production', 'staging')."),
+    profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
+):
+    """
+    Push a sandbox app deployment to a specified target environment.
+    """
+    auth = get_auth(profile=profile, env=env)
+    
+    if not auth.ensure_valid_token():
+        console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
+        raise typer.Exit(1)
+        
+    api_base_url = get_api_base_url(env=env)
+    
+    try:
+        # Execute POST Push
+        url = f"{api_base_url}/sandbox/{sandbox_name}/app/{app_name}/push"
+        params = {}
+        if target:
+            params["target"] = target
+            console.print(f"Pushing app [blue]{app_name}[/blue] from sandbox [blue]{sandbox_name}[/blue] to target [green]{target}[/green]...")
+        else:
+            console.print(f"Pushing app [blue]{app_name}[/blue] from sandbox [blue]{sandbox_name}[/blue] to parent environment...")
+            
+        response = httpx.post(
+            url, 
+            params=params, 
+            headers={"Authorization": f"Bearer {auth.access_token}"},
+            timeout=120.0
+        )
+        if response.status_code == 200:
+            console.print("[bold green]✓ Sandbox push successful![/bold green]")
+            
+            try:
+                data = response.json()
+                from rich.json import JSON
+                console.print(JSON.from_data(data))
+            except Exception:
+                console.print(response.text)
+        else:
+            console.print(f"[bold red]Push failed ({response.status_code}):[/bold red]")
+            try:
+                err_data = response.json()
+                console.print(f"[red]{json.dumps(err_data, indent=2)}[/red]")
+            except Exception:
+                console.print(f"[red]{response.text}[/red]")
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        console.print(f"[bold red]Error connecting to API:[/bold red] {str(e)}")
+        raise typer.Exit(1)
+
 if __name__ == "__main__":
     app()
+
+
