@@ -1638,6 +1638,7 @@ def deploy_marketplace(
     
     response = httpx.post(
         url,
+        json={},
         headers={"Authorization": f"Bearer {auth.access_token}"},
         timeout=120.0
     )
@@ -1708,6 +1709,7 @@ def apply_subscribers(
     
     response = httpx.post(
         url,
+        json={},
         headers={"Authorization": f"Bearer {auth.access_token}"},
         timeout=120.0
     )
