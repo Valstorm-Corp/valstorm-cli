@@ -1632,14 +1632,12 @@ def deploy_marketplace(
         raise typer.Exit(1)
         
     api_base_url = get_api_base_url(env=env)
-    # app_id = get_app_id_by_name(auth, api_base_url, app_name)
     
     url = f"{api_base_url}/apps/marketplace-deployment?id={app_name}"
-    console.print(f"Deploying app [blue]{app_name}[/blue] ({app_name}) to Marketplace...")
+    console.print(f"Deploying app [blue]{app_name}[/blue] to Marketplace...")
     
     response = httpx.post(
         url,
-        json={"id": app_name},
         headers={"Authorization": f"Bearer {auth.access_token}"},
         timeout=120.0
     )
@@ -1669,10 +1667,9 @@ def deploy_next_env(
         raise typer.Exit(1)
         
     api_base_url = get_api_base_url(env=env)
-    # app_id = get_app_id_by_name(auth, api_base_url, app_name)
     
     url = f"{api_base_url}/apps/deploy/{app_name}"
-    console.print(f"Deploying app [blue]{app_name}[/blue] ({app_name}) to the next environment...")
+    console.print(f"Deploying app [blue]{app_name}[/blue] to next environment...")
     
     response = httpx.get(
         url,
@@ -1680,7 +1677,7 @@ def deploy_next_env(
         timeout=120.0
     )
     if response.status_code == 200:
-        console.print("[bold green]✓ Next-env deployment successful![/bold green]")
+        console.print("[bold green]✓ Next environment deployment successful![/bold green]")
         try:
             from rich.json import JSON
             console.print(JSON.from_data(response.json()))
@@ -1705,14 +1702,12 @@ def apply_subscribers(
         raise typer.Exit(1)
         
     api_base_url = get_api_base_url(env=env)
-    app_id = get_app_id_by_name(auth, api_base_url, app_name)
     
-    url = f"{api_base_url}/apps/app-update-subscribers"
-    console.print(f"Applying updates for app [blue]{app_name}[/blue] ({app_id}) to subscribers...")
+    url = f"{api_base_url}/apps/app-update-subscribers?id={app_name}"
+    console.print(f"Applying updates for app [blue]{app_name}[/blue] to subscribers...")
     
     response = httpx.post(
         url,
-        json={"id": app_id},
         headers={"Authorization": f"Bearer {auth.access_token}"},
         timeout=120.0
     )
@@ -1724,7 +1719,7 @@ def apply_subscribers(
         except Exception:
             console.print(response.text)
     else:
-        console.print(f"[bold red]Apply failed ({response.status_code}):[/bold red] {response.text}")
+        console.print(f"[bold red]Failed to apply updates ({response.status_code}):[/bold red] {response.text}")
         raise typer.Exit(1)
 
 if __name__ == "__main__":
