@@ -1632,14 +1632,14 @@ def deploy_marketplace(
         raise typer.Exit(1)
         
     api_base_url = get_api_base_url(env=env)
-    app_id = get_app_id_by_name(auth, api_base_url, app_name)
+    # app_id = get_app_id_by_name(auth, api_base_url, app_name)
     
-    url = f"{api_base_url}/apps/marketplace-deployment"
-    console.print(f"Deploying app [blue]{app_name}[/blue] ({app_id}) to Marketplace...")
+    url = f"{api_base_url}/apps/marketplace-deployment?id={app_name}"
+    console.print(f"Deploying app [blue]{app_name}[/blue] ({app_name}) to Marketplace...")
     
     response = httpx.post(
         url,
-        json={"id": app_id},
+        json={"id": app_name},
         headers={"Authorization": f"Bearer {auth.access_token}"},
         timeout=120.0
     )
@@ -1669,10 +1669,10 @@ def deploy_next_env(
         raise typer.Exit(1)
         
     api_base_url = get_api_base_url(env=env)
-    app_id = get_app_id_by_name(auth, api_base_url, app_name)
+    # app_id = get_app_id_by_name(auth, api_base_url, app_name)
     
-    url = f"{api_base_url}/apps/deploy/{app_id}"
-    console.print(f"Deploying app [blue]{app_name}[/blue] ({app_id}) to the next environment...")
+    url = f"{api_base_url}/apps/deploy/{app_name}"
+    console.print(f"Deploying app [blue]{app_name}[/blue] ({app_name}) to the next environment...")
     
     response = httpx.get(
         url,
