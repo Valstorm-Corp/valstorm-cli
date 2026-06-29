@@ -222,9 +222,12 @@ def get_pkce_pair():
 
 @app.command()
 def login(
+    method: Optional[str] = typer.Argument(None, help="Login method, e.g., 'pat'"),
+    key: Optional[str] = typer.Argument(None, help="The token/key for the given method"),
     profile: str = typer.Option(None, "--profile", "-p", help="Profile name to save these credentials under."),
     env: str = typer.Option(None, "--env", "-e", help="Target environment (local, dev, prod)."),
-    use_password: bool = typer.Option(False, "--password", help="Use legacy password flow.")
+    use_password: bool = typer.Option(False, "--password", help="Use legacy password flow."),
+    pat: str = typer.Option(None, "--pat", help="Login using a Personal Access Token (PAT).")
 ):
     """
     Authenticate with Valstorm.
@@ -232,6 +235,24 @@ def login(
     auth = get_auth(profile=profile, env=env)
     
     console.print(f"Logging in to [blue]{get_api_base_url(auth.env)}[/blue] (Profile: [cyan]{auth.profile}[/cyan])")
+
+    if method == "pat" and key:
+        pat = key
+    elif method == "pat" and not key:
+        console.print("[bold red]Error: You must provide a token when using 'pat' method. Usage: valstorm login pat <key>[/bold red]")
+        raise typer.Exit(1)
+    elif method:
+        console.print(f"[bold red]Unknown login method: {method}[/bold red]")
+        raise typer.Exit(1)
+
+    if pat:
+        auth.save_tokens(access_token=pat, refresh_token="") # empty string wipes the old refresh token
+        if auth.ensure_valid_token():
+            console.print(f"[bold green]Successfully logged in using PAT for profile '{auth.profile}'.[/bold green]")
+            return
+        else:
+            console.print("[bold red]Invalid Personal Access Token.[/bold red]")
+            raise typer.Exit(1)
     
     if use_password:
         email = typer.prompt("Email")

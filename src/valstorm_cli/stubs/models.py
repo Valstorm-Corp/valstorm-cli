@@ -906,3 +906,15 @@ class Function(BetterBaseModel):
     file_name: str
     app: dict | Lookup | str = ''
     code: str = ''
+
+class PersonalAccessTokenCreate(BaseModel):
+    name: str
+    expires_in_days: Optional[int] = None
+
+class PersonalAccessTokenResponse(BaseModel):
+    id: str
+    name: str
+    token: Optional[str] = None
+    created_at: str
+    expires_at: Optional[str] = None
+    last_used_at: Optional[str] = None
