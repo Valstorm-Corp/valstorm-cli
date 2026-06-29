@@ -1143,15 +1143,25 @@ def pull(
             target_dir = root / "object" / file_type
             target_dir.mkdir(parents=True, exist_ok=True)
             
-            # Save metadata alongside the code
-            with open(target_dir / f"{file_type}_metadata.json", "w") as f:
-                json.dump(records, f, indent=4)
+            # Clean up old monolithic metadata file if it exists
+            old_meta = target_dir / f"{file_type}_metadata.json"
+            if old_meta.exists():
+                try:
+                    old_meta.unlink()
+                except Exception:
+                    pass
 
-            # Extract code if present
             count = 0
             code_count = 0
             for record in records:
                 count += 1
+                
+                # Save individual metadata
+                safe_name = "".join(c for c in str(record.get("name", "unnamed")) if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
+                record_id = record.get("id", "noid")
+                
+                with open(target_dir / f"{safe_name}_{record_id}.json", "w") as f:
+                    json.dump(record, f, indent=4)
                 file_name = record.get("file_name")
                 code = record.get("code")
                 
@@ -1272,12 +1282,28 @@ def push(
 
     for file_type in types:
         local_dir = object_root / file_type
-        metadata_path = local_dir / f"{file_type}_metadata.json"
         
         metadata = []
-        if metadata_path.exists():
-            with open(metadata_path, "r") as f:
-                metadata = json.load(f)
+        # Load legacy monolithic file if present
+        legacy_meta = local_dir / f"{file_type}_metadata.json"
+        if legacy_meta.exists():
+            try:
+                with open(legacy_meta, "r") as f:
+                    metadata.extend(json.load(f))
+            except Exception:
+                pass
+                
+        # Load individual JSON metadata files
+        for meta_file in local_dir.glob("*.json"):
+            if meta_file.name == f"{file_type}_metadata.json":
+                continue
+            try:
+                with open(meta_file, "r") as f:
+                    record_data = json.load(f)
+                    if isinstance(record_data, dict):
+                        metadata.append(record_data)
+            except Exception:
+                pass
             
         updates_payload = []
         creates_payload = []
