@@ -28,6 +28,8 @@ auth_app = typer.Typer(help="Manage Valstorm authentication profiles")
 
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(auth_app, name="auth")
+from .sandbox import sandbox_app
+app.add_typer(sandbox_app, name="sandbox")
 console = Console()
 
 @auth_app.command(name="list")
