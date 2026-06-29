@@ -2,7 +2,6 @@ import typer
 import httpx
 import json
 from typing import Optional, List
-from pathlib import Path
 from rich.console import Console
 from .auth import ValstormAuth
 
@@ -114,7 +113,7 @@ def delete_record(
 
     with auth.get_client() as client:
         try:
-            res = client.request("DELETE", f"/object/{schema_api_name}", json={"ids": ids_to_delete})
+            res = client.request("DELETE", f"/object/{schema_api_name}", params={"ids": ids_to_delete})
             if res.status_code != 200:
                 console.print(f"[bold red]Failed to delete record(s):[/bold red] {res.text}")
                 raise typer.Exit(1)

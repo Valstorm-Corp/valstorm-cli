@@ -2,7 +2,6 @@ import typer
 import httpx
 import json
 from typing import Optional
-from pathlib import Path
 from rich.console import Console
 from .auth import ValstormAuth
 

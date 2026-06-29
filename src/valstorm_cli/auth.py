@@ -1,8 +1,9 @@
 import json
 import os
 import sys
+import typer
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 from rich.console import Console
 
 import httpx
@@ -167,7 +168,7 @@ class ValstormAuth:
                     return True
                 else:
                     return False
-        except Exception as e:
+        except Exception:
             # print(f"Error refreshing token: {e}", file=sys.stderr)
             return False
 
@@ -211,3 +212,39 @@ class ValstormAuth:
             return False
         console.print(f"[red]Unexpected error validating token for profile '{self.profile}' in environment '{self.env}'. Please log in again.[/red]")
         return False
+
+
+def find_project_root() -> Optional[Path]:
+    current = Path.cwd()
+    while current != current.parent:
+        if (current / "valstorm.json").exists():
+            return current
+        current = current.parent
+    return None
+
+def get_project_root() -> Path:
+    root = find_project_root()
+    if root:
+        return root
+    raise typer.Exit(1)
+
+def load_config(root: Path) -> dict:
+    with open(root / "valstorm.json", "r") as f:
+        return json.load(f)
+
+def get_auth(profile: Optional[str] = None, env: Optional[str] = None) -> 'ValstormAuth':
+    auth_profile = profile
+    auth_env = env
+
+    root = find_project_root()
+    if root:
+        try:
+            config = load_config(root)
+            if auth_profile is None:
+                auth_profile = config.get("profile")
+            if auth_env is None:
+                auth_env = config.get("env")
+        except Exception:
+            pass
+
+    return ValstormAuth(profile=auth_profile, env=auth_env)
