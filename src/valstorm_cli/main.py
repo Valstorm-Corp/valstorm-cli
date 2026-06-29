@@ -31,7 +31,17 @@ app.add_typer(mcp_app, name="mcp")
 app.add_typer(auth_app, name="auth")
 app.add_typer(manifest_app, name="manifest")
 from .sandbox import sandbox_app
+from .record import record_app
+from .schema import schema_app
+from .field import field_app
+from .query import sql, graphql
+
 app.add_typer(sandbox_app, name="sandbox")
+app.add_typer(record_app, name="record")
+app.add_typer(schema_app, name="schema")
+app.add_typer(field_app, name="field")
+app.command(name="sql")(sql)
+app.command(name="graphql")(graphql)
 console = Console()
 
 @auth_app.command(name="list")
@@ -478,98 +488,7 @@ def update():
         console.print(f"[bold red]An unexpected error occurred:[/bold red] {e}")
         raise typer.Exit(1)
 
-@app.command()
-def sql_query(
-    query: str = typer.Argument(..., help="The SQL query to execute."),
-    profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
-    env: str = typer.Option(None, "--env", "-e", help="Target environment."),
-    output: str = typer.Option("table", "--output", "-o", help="Output format (table, json)."),
-    bypass_cache: bool = typer.Option(False, "--bypass-cache", help="Bypass the query cache."),
-    save: Optional[str] = typer.Option(None, "--save", "-s", help="Save results to a JSON file."),
-    csv: Optional[str] = typer.Option(None, "--csv", help="Save results to a CSV file.")
-):
-    """
-    Execute a SQL-like query against the Valstorm API.
-    """
-    auth = get_auth(profile=profile, env=env)
-    
-    if not auth.ensure_valid_token():
-        console.print("[bold red]Not logged in or token expired.[/bold red] Please run `valstorm login`.")
-        raise typer.Exit(1)
-        
-    with auth.get_client() as client:
-        try:
-            response = client.post("/query", json={
-                "query": query,
-                "bypass_cache": bypass_cache
-            })
-            
-            if response.status_code != 200:
-                console.print(f"[bold red]Query failed ({response.status_code}):[/bold red] {response.text}")
-                raise typer.Exit(1)
-                
-            data = response.json()
-            
-            # Save logic
-            if save:
-                with open(save, 'w') as f:
-                    json.dump(data, f, indent=4)
-                console.print(f"[green]✓ Results saved to {save}[/green]")
-                
-            if csv:
-                if isinstance(data, list) and len(data) > 0:
-                    import csv
-                    keys = data[0].keys()
-                    with open(csv, 'w', newline='') as f:
-                        dict_writer = csv.DictWriter(f, fieldnames=keys)
-                        dict_writer.writeheader()
-                        dict_writer.writerows(data)
-                    console.print(f"[green]✓ Results saved to {csv}[/green]")
-                elif isinstance(data, dict):
-                    import csv
-                    keys = data.keys()
-                    with open(csv, 'w', newline='') as f:
-                        dict_writer = csv.DictWriter(f, fieldnames=keys)
-                        dict_writer.writeheader()
-                        dict_writer.writerow(data)
-                    console.print(f"[green]✓ Results saved to {csv}[/green]")
-                else:
-                    console.print("[yellow]Cannot save non-list/dict data as CSV.[/yellow]")
 
-            if output == "json":
-                console.print_json(data=data)
-            else:
-                if not data:
-                    console.print("[yellow]No records found.[/yellow]")
-                    return
-                
-                from rich.table import Table
-                table = Table(show_header=True, header_style="bold magenta")
-                
-                # Get columns from first record
-                if isinstance(data, list) and len(data) > 0:
-                    columns = data[0].keys()
-                    for col in columns:
-                        table.add_column(col)
-                        
-                    for row in data:
-                        table.add_row(*[str(row.get(col, "")) for col in columns])
-                    
-                    console.print(table)
-                    console.print(f"\n[dim]Total records: {len(data)}[/dim]")
-                elif isinstance(data, dict):
-                    # Handle single record if applicable
-                    columns = data.keys()
-                    for col in columns:
-                        table.add_column(col)
-                    table.add_row(*[str(data.get(col, "")) for col in columns])
-                    console.print(table)
-                else:
-                    console.print(data)
-                    
-        except httpx.RequestError as e:
-            console.print(f"[bold red]Connection Error:[/bold red] {e}")
-            raise typer.Exit(1)
 
 @app.command(name="open")
 def open_browser(
