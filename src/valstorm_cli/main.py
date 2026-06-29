@@ -25,9 +25,11 @@ from rich.console import Console
 app = typer.Typer(help="Valstorm Developer CLI", no_args_is_help=True)
 mcp_app = typer.Typer(help="Manage the Valstorm MCP Server")
 auth_app = typer.Typer(help="Manage Valstorm authentication profiles")
+manifest_app = typer.Typer(help="Manage Valstorm manifests")
 
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(auth_app, name="auth")
+app.add_typer(manifest_app, name="manifest")
 from .sandbox import sandbox_app
 app.add_typer(sandbox_app, name="sandbox")
 console = Console()
@@ -1829,7 +1831,41 @@ def apply_subscribers(
         console.print(f"[bold red]Failed to apply updates ({response.status_code}):[/bold red] {response.text}")
         raise typer.Exit(1)
 
+@manifest_app.command(name="generate")
+def generate_manifest(name: str = typer.Argument(..., help="The name of the manifest file to generate")):
+    """
+    Generate a boilerplate deployment manifest.
+    """
+    if not name.endswith(".json"):
+        name += ".json"
+        
+    try:
+        root = get_project_root()
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] Must be run inside a Valstorm project.")
+        raise typer.Exit(1)
+        
+    manifests_dir = root / "manifests"
+    manifests_dir.mkdir(exist_ok=True)
+    
+    file_path = manifests_dir / name
+    if file_path.exists():
+        console.print(f"[bold red]Error:[/bold red] Manifest {file_path.name} already exists.")
+        raise typer.Exit(1)
+        
+    boilerplate = {
+        "version": "1.0",
+        "description": "Deployment manifest",
+        "objects": {}
+    }
+    
+    with open(file_path, "w") as f:
+        json.dump(boilerplate, f, indent=4)
+        
+    console.print(f"[bold green]✓ Generated manifest:[/bold green] {file_path}")
+
 if __name__ == "__main__":
     app()
+
 
 
