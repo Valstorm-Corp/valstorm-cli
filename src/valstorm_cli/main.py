@@ -1864,6 +1864,149 @@ def generate_manifest(name: str = typer.Argument(..., help="The name of the mani
         
     console.print(f"[bold green]✓ Generated manifest:[/bold green] {file_path}")
 
+
+@app.command(name="scaffold-docs")
+def scaffold_docs(
+    profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: str = typer.Option(None, "--env", "-e", help="Target environment.")
+):
+    """
+    Fetch documentation records and scaffold them as Markdown files.
+    """
+    auth = get_auth(profile=profile, env=env)
+    
+    if not auth.ensure_valid_token():
+        console.print("[bold red]Not logged in or token expired.[/bold red] Please run `valstorm login`.")
+        raise typer.Exit(1)
+        
+    try:
+        root = get_project_root()
+    except Exception:
+        root = Path.cwd()
+        
+    docs_dir = root / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    
+    with auth.get_client() as client:
+        try:
+            response = client.post("/query", json={
+                "query": "SELECT * FROM documentation"
+            })
+            
+            if response.status_code != 200:
+                console.print(f"[bold red]Query failed ({response.status_code}):[/bold red] {response.text}")
+                raise typer.Exit(1)
+                
+            data = response.json()
+            
+            if not isinstance(data, list):
+                console.print("[yellow]Expected a list of documentation records.[/yellow]")
+                raise typer.Exit(1)
+                
+            console.print(f"Found {len(data)} documentation records. Scaffolding...")
+            
+            def tree_to_markdown(node):
+                if not node:
+                    return ""
+                    
+                if isinstance(node, list):
+                    return "\n".join(tree_to_markdown(child) for child in node if child)
+                
+                md = ""
+                component = node.get("component", "")
+                props = node.get("props", {})
+                children = node.get("children", [])
+                
+                if component == "Typography":
+                    variant = props.get("variant", "body1")
+                    text = props.get("text", "")
+                    
+                    if variant == "h1":
+                        md += f"# {text}\n\n"
+                    elif variant == "h2":
+                        md += f"## {text}\n\n"
+                    elif variant == "h3":
+                        md += f"### {text}\n\n"
+                    elif variant == "h4":
+                        md += f"#### {text}\n\n"
+                    elif variant == "h5":
+                        md += f"##### {text}\n\n"
+                    elif variant == "h6":
+                        md += f"###### {text}\n\n"
+                    else:
+                        md += f"{text}\n\n"
+                elif component == "Text":
+                    md += f"{props.get('text', '')}\n\n"
+                elif component == "Paragraph":
+                    md += f"{props.get('text', '')}\n\n"
+                
+                for child in children:
+                    md += tree_to_markdown(child)
+                    
+                return md
+
+            for record in data:
+                name = record.get("name", "untitled")
+                slug = record.get("slug", "") or name
+                category = record.get("category", "uncategorized")
+                if not category:
+                    category = "uncategorized"
+                seo_title = record.get("seo_title", "")
+                seo_description = record.get("seo_description", "")
+                is_published = record.get("is_published", False)
+                
+                def sanitize(s):
+                    import re
+                    s = str(s).lower()
+                    s = re.sub(r'[^a-z0-9]+', '-', s)
+                    return s.strip('-')
+                
+                safe_category = sanitize(category)
+                if not safe_category:
+                    safe_category = "uncategorized"
+                    
+                safe_slug = sanitize(slug)
+                if not safe_slug:
+                    continue
+                    
+                cat_dir = docs_dir / safe_category
+                cat_dir.mkdir(parents=True, exist_ok=True)
+                
+                file_path = cat_dir / f"{safe_slug}.md"
+                
+                frontmatter = "---\n"
+                frontmatter += f"title: \"{name}\"\n"
+                if seo_title:
+                    frontmatter += f"seo_title: \"{seo_title}\"\n"
+                if seo_description:
+                    frontmatter += f"seo_description: \"{seo_description}\"\n"
+                frontmatter += f"category: \"{category}\"\n"
+                frontmatter += f"is_published: {str(is_published).lower()}\n"
+                frontmatter += "---\n\n"
+                
+                content_json = record.get("content")
+                md_body = ""
+                
+                if content_json:
+                    if isinstance(content_json, str):
+                        try:
+                            content_data = json.loads(content_json)
+                        except json.JSONDecodeError:
+                            content_data = []
+                    else:
+                        content_data = content_json
+                        
+                    md_body = tree_to_markdown(content_data)
+                    
+                with open(file_path, "w") as f:
+                    f.write(frontmatter + md_body)
+                    
+                console.print(f"[green]✓[/green] Created {file_path.relative_to(root)}")
+                
+        except httpx.RequestError as e:
+            console.print(f"[bold red]Connection Error:[/bold red] {e}")
+            raise typer.Exit(1)
+
 if __name__ == "__main__":
     app()
 
