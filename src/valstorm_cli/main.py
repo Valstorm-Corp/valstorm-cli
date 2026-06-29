@@ -44,13 +44,11 @@ def login(
 from .sandbox import sandbox_app
 from .record import record_app
 from .schema import schema_app
-from .field import field_app
 from .query import sql, graphql
 
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(record_app, name="record")
 app.add_typer(schema_app, name="schema")
-app.add_typer(field_app, name="field")
 app.command(name="sql")(sql)
 app.command(name="graphql")(graphql)
 console = Console()

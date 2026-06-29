@@ -152,3 +152,5 @@ def delete_schema(
         except httpx.RequestError as e:
             console.print(f"[bold red]Connection Error:[/bold red] {e}")
             raise typer.Exit(1)
+from .field import field_app
+schema_app.add_typer(field_app, name='field')
