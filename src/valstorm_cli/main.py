@@ -392,6 +392,55 @@ def login(
         console.print("[bold red]Unexpected response during login.[/bold red]")
         console.print(data)
 
+@app.command(name="logout")
+def logout(
+    profile: str = typer.Option(None, "--profile", "-p", help="Specific profile to remove."),
+    env: str = typer.Option(None, "--env", "-e", help="Specific environment to remove."),
+    clear_all: bool = typer.Option(False, "--all", help="Remove all saved profiles.")
+):
+    """
+    Log out by removing saved authentication profiles.
+    """
+    auth_dir = Path.home() / ".valstorm"
+    if not auth_dir.exists():
+        console.print("[yellow]No Valstorm profiles found.[/yellow]")
+        return
+
+    if clear_all:
+        count = 0
+        for path in auth_dir.glob("auth_*.json"):
+            path.unlink()
+            count += 1
+        console.print(f"[bold green]Successfully removed {count} profile(s).[/bold green]")
+        return
+        
+    # If not clearing all, determine env and profile
+    if not env or not profile:
+        root = find_project_root()
+        if root:
+            try:
+                config = load_config(root)
+                env = env or config.get("env", "prod")
+                profile = profile or config.get("profile", "default")
+            except Exception:
+                env = env or "prod"
+                profile = profile or "default"
+        else:
+            env = env or "prod"
+            profile = profile or "default"
+            
+    auth_file = auth_dir / f"auth_{env}_{profile}.json"
+    legacy_auth_file = auth_dir / f"auth_{env}.json"
+    
+    if auth_file.exists():
+        auth_file.unlink()
+        console.print(f"[bold green]Successfully removed profile '{profile}' for environment '{env}'.[/bold green]")
+    elif profile == "default" and legacy_auth_file.exists():
+        legacy_auth_file.unlink()
+        console.print(f"[bold green]Successfully removed legacy profile for environment '{env}'.[/bold green]")
+    else:
+        console.print(f"[yellow]Warning: Profile '{profile}' for environment '{env}' not found.[/yellow]")
+
 @app.command()
 def update():
     """
