@@ -1082,6 +1082,7 @@ def update_stubs_command(
 @app.command()
 def pull(
     object_type: str = typer.Argument(None, help="Specific object type to pull (e.g., record_trigger)."),
+    file_name: str = typer.Argument(None, help="Specific file to pull (e.g., trigger_name.py)."),
     force: bool = typer.Option(False, "--force", "--yes", "-y", help="Overwrite local changes without asking."),
     profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
     env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
@@ -1140,6 +1141,8 @@ def pull(
     for file_type in target_types:
         console.print(f"Pulling [cyan]{file_type}[/cyan]s from [blue]{get_api_base_url(auth.env)}[/blue]...")
         query = f"SELECT * FROM {file_type}"
+        if file_name:
+            query += f" WHERE file_name = '{file_name}'"
         
         with auth.get_client() as client:
             response = client.post("/query", json={"query": query})
@@ -1154,6 +1157,9 @@ def pull(
             if not isinstance(records, list):
                 console.print(f"[yellow]No records found for {file_type}.[/yellow]")
                 continue
+                
+            if file_name:
+                records = [r for r in records if r.get("file_name") == file_name]
 
             target_dir = root / "object" / file_type
             target_dir.mkdir(parents=True, exist_ok=True)
@@ -1270,6 +1276,8 @@ def pull_schemas(
 
 @app.command()
 def push(
+    api_name: str = typer.Argument(None, help="Specific object directory to push (e.g., record_trigger)."),
+    file_name: str = typer.Argument(None, help="Specific file to push (e.g., trigger_name.py)."),
     profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
     env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
 ):
@@ -1289,17 +1297,20 @@ def push(
         return
 
     # Identify which types we have locally
-    types = [d.name for d in object_root.iterdir() if d.is_dir() and not d.name.startswith(".")]
-    
-    # Filter types by configuration if present
-    try:
-        with open(root / "valstorm.json", "r") as f:
-            config = json.load(f)
-            configured_objects = config.get("objects")
-            if configured_objects:
-                types = [t for t in types if t in configured_objects]
-    except Exception:
-        pass
+    if api_name:
+        types = [api_name]
+    else:
+        types = [d.name for d in object_root.iterdir() if d.is_dir() and not d.name.startswith(".")]
+        
+        # Filter types by configuration if present
+        try:
+            with open(root / "valstorm.json", "r") as f:
+                config = json.load(f)
+                configured_objects = config.get("objects")
+                if configured_objects:
+                    types = [t for t in types if t in configured_objects]
+        except Exception:
+            pass
     
     if not types:
         console.print("[yellow]No object types found in 'object' directory.[/yellow]")
@@ -1337,14 +1348,15 @@ def push(
         meta_map = {r.get("file_name"): r for r in metadata if r.get("file_name")}
         
         # Scan local directory for changes and new files
-        for file_path in local_dir.glob("*.py"):
-            file_name = file_path.name
+        glob_pattern = file_name if file_name else "*.py"
+        for file_path in local_dir.glob(glob_pattern):
+            current_file_name = file_path.name
             with open(file_path, "r") as f:
                 local_code = f.read()
             
-            if file_name in meta_map:
+            if current_file_name in meta_map:
                 # This is an existing file, check for updates
-                record = meta_map[file_name]
+                record = meta_map[current_file_name]
                 if local_code != record.get("code"):
                     updates_payload.append({
                         "id": record["id"],
@@ -1353,14 +1365,14 @@ def push(
                     })
             else:
                 # This is a NEW file, we need to create it in the cloud
-                console.print(f"Detected new local {file_type}: [cyan]{file_name}[/cyan]")
-                if typer.confirm(f"Do you want to create {file_name} in the cloud?"):
-                    name = typer.prompt(f"Display name for this {file_type}", default=file_name.replace(".py", "").replace("_", " ").title())
+                console.print(f"Detected new local {file_type}: [cyan]{current_file_name}[/cyan]")
+                if typer.confirm(f"Do you want to create {current_file_name} in the cloud?"):
+                    name = typer.prompt(f"Display name for this {file_type}", default=current_file_name.replace(".py", "").replace("_", " ").title())
                     app_id = typer.prompt("App ID (The UUID of the Valstorm App this belongs to)")
                     
                     new_record = {
                         "name": name,
-                        "file_name": file_name,
+                        "file_name": current_file_name,
                         "code": local_code,
                         "app": app_id,
                         "active": True
@@ -1405,8 +1417,11 @@ def push(
         
         # Save updated metadata back to disk
         if creates_payload or updates_payload:
-            with open(metadata_path, "w") as f:
-                json.dump(metadata, f, indent=4)
+            for record in metadata:
+                safe_name = "".join(c for c in str(record.get("name", "unnamed")) if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
+                record_id = record.get("id", "noid")
+                with open(local_dir / f"{safe_name}_{record_id}.json", "w") as f:
+                    json.dump(record, f, indent=4)
         
         if not (creates_payload or updates_payload):
             console.print(f"No changes detected for [cyan]{file_type}[/cyan]s.")
