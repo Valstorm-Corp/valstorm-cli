@@ -598,7 +598,12 @@ def init(
     
     config = {
         "env": auth.env,
-        "profile": auth.profile
+        "profile": auth.profile,
+        "objects": [
+            "record_trigger", "function", "ai_agent", "app", 
+            "app_page", "app_metadata", "permission", 
+            "notification_setting", "schedule_trigger_setting", "workspace"
+        ]
     }
     
     with open(target_path / "valstorm.json", "w") as f:
@@ -1110,14 +1115,24 @@ def pull(
             raise typer.Exit(1)
         target_types = [object_type]
     else:
-        core_types = ["record_trigger", "function"]
-        metadata_types = [
-            "ai_agent", "app", "app_page", "app_metadata", 
-            "permission", "notification_setting", 
-            "schedule_trigger_setting", "workspace"
-        ]
-        # Filter types that exist in the schemas
-        target_types = [t for t in (core_types + metadata_types) if t in available_schemas]
+        try:
+            with open(root / "valstorm.json", "r") as f:
+                config = json.load(f)
+        except Exception:
+            config = {}
+            
+        configured_objects = config.get("objects")
+        
+        if configured_objects:
+            target_types = [t for t in configured_objects if t in available_schemas]
+        else:
+            core_types = ["record_trigger", "function"]
+            metadata_types = [
+                "ai_agent", "app", "app_page", "app_metadata", 
+                "permission", "notification_setting", 
+                "schedule_trigger_setting", "workspace"
+            ]
+            target_types = [t for t in (core_types + metadata_types) if t in available_schemas]
     
     if not target_types:
         console.print("[yellow]No matching objects found in schemas to pull records for.[/yellow]")
@@ -1275,6 +1290,16 @@ def push(
 
     # Identify which types we have locally
     types = [d.name for d in object_root.iterdir() if d.is_dir() and not d.name.startswith(".")]
+    
+    # Filter types by configuration if present
+    try:
+        with open(root / "valstorm.json", "r") as f:
+            config = json.load(f)
+            configured_objects = config.get("objects")
+            if configured_objects:
+                types = [t for t in types if t in configured_objects]
+    except Exception:
+        pass
     
     if not types:
         console.print("[yellow]No object types found in 'object' directory.[/yellow]")
