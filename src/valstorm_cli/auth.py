@@ -21,11 +21,32 @@ WEB_ENVIRONMENTS = {
     "local": "http://localhost:3000"
 }
 
+def _load_workspace_config() -> dict:
+    """Helper to find and load valstorm.json by searching upwards."""
+    current = Path.cwd()
+    while current != current.parent:
+        config_path = current / "valstorm.json"
+        if config_path.exists():
+            try:
+                with open(config_path, "r") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+            break
+        current = current.parent
+    return {}
+
 def get_env() -> str:
-    return os.environ.get("VALSTORM_ENV", "prod").lower()
+    if "VALSTORM_ENV" in os.environ:
+        return os.environ["VALSTORM_ENV"].lower()
+    config = _load_workspace_config()
+    return config.get("env", "prod").lower()
 
 def get_profile() -> str:
-    return os.environ.get("VALSTORM_PROFILE", "default").lower()
+    if "VALSTORM_PROFILE" in os.environ:
+        return os.environ["VALSTORM_PROFILE"].lower()
+    config = _load_workspace_config()
+    return config.get("profile", "default").lower()
 
 def get_base_url(env: str = None) -> str:
     env = env or get_env()
