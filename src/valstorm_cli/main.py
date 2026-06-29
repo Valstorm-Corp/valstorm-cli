@@ -1083,6 +1083,7 @@ def update_stubs_command(
 def pull(
     object_type: str = typer.Argument(None, help="Specific object type to pull (e.g., record_trigger)."),
     file_name: str = typer.Argument(None, help="Specific file to pull (e.g., trigger_name.py)."),
+    manifest: str = typer.Option(None, "--manifest", "-m", help="Path to a deployment manifest JSON file."),
     force: bool = typer.Option(False, "--force", "--yes", "-y", help="Overwrite local changes without asking."),
     profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
     env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
@@ -1110,7 +1111,16 @@ def pull(
         available_schemas = schema_res.json()
 
     # 2. Define target types
-    if object_type:
+    manifest_data = None
+    if manifest:
+        manifest_path = Path(manifest)
+        if not manifest_path.exists():
+            console.print(f"[bold red]Manifest file not found:[/bold red] {manifest}")
+            raise typer.Exit(1)
+        with open(manifest_path, "r") as f:
+            manifest_data = json.load(f).get("objects", {})
+        target_types = [t for t in manifest_data.keys() if t in available_schemas]
+    elif object_type:
         if object_type not in available_schemas:
             console.print(f"[bold red]Error:[/bold red] Object type '{object_type}' not found in schemas.")
             raise typer.Exit(1)
@@ -1141,7 +1151,14 @@ def pull(
     for file_type in target_types:
         console.print(f"Pulling [cyan]{file_type}[/cyan]s from [blue]{get_api_base_url(auth.env)}[/blue]...")
         query = f"SELECT * FROM {file_type}"
-        if file_name:
+        if manifest_data and file_type in manifest_data:
+            files_to_pull = manifest_data[file_type]
+            if isinstance(files_to_pull, list) and files_to_pull:
+                conditions = " OR ".join([f"file_name = '{f}'" for f in files_to_pull])
+                query += f" WHERE ({conditions})"
+            elif isinstance(files_to_pull, list) and not files_to_pull:
+                continue
+        elif file_name:
             query += f" WHERE file_name = '{file_name}'"
         
         with auth.get_client() as client:
@@ -1278,6 +1295,7 @@ def pull_schemas(
 def push(
     api_name: str = typer.Argument(None, help="Specific object directory to push (e.g., record_trigger)."),
     file_name: str = typer.Argument(None, help="Specific file to push (e.g., trigger_name.py)."),
+    manifest: str = typer.Option(None, "--manifest", "-m", help="Path to a deployment manifest JSON file."),
     profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
     env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
 ):
@@ -1297,7 +1315,16 @@ def push(
         return
 
     # Identify which types we have locally
-    if api_name:
+    manifest_data = None
+    if manifest:
+        manifest_path = Path(manifest)
+        if not manifest_path.exists():
+            console.print(f"[bold red]Manifest file not found:[/bold red] {manifest}")
+            raise typer.Exit(1)
+        with open(manifest_path, "r") as f:
+            manifest_data = json.load(f).get("objects", {})
+        types = [t for t in manifest_data.keys() if (object_root / t).exists()]
+    elif api_name:
         types = [api_name]
     else:
         types = [d.name for d in object_root.iterdir() if d.is_dir() and not d.name.startswith(".")]
@@ -1349,7 +1376,17 @@ def push(
         
         # Scan local directory for changes and new files
         glob_pattern = file_name if file_name else "*.py"
-        for file_path in local_dir.glob(glob_pattern):
+        files_to_scan = []
+        if manifest_data and file_type in manifest_data:
+            manifest_files = manifest_data[file_type]
+            if manifest_files == '*':
+                files_to_scan = list(local_dir.glob(glob_pattern))
+            elif isinstance(manifest_files, list):
+                files_to_scan = [local_dir / f for f in manifest_files if (local_dir / f).exists()]
+        else:
+            files_to_scan = list(local_dir.glob(glob_pattern))
+
+        for file_path in files_to_scan:
             current_file_name = file_path.name
             with open(file_path, "r") as f:
                 local_code = f.read()
