@@ -1915,6 +1915,9 @@ def scaffold_docs(
                 md = ""
                 component = node.get("component", "")
                 props = node.get("props", {})
+                if not component and "component_type" in props:
+                    component = props["component_type"]
+                    
                 children = node.get("children", [])
                 
                 if component == "Typography":
@@ -1939,9 +1942,13 @@ def scaffold_docs(
                     md += f"{props.get('text', '')}\n\n"
                 elif component == "Paragraph":
                     md += f"{props.get('text', '')}\n\n"
+                elif component == "RichText":
+                    md += f"{props.get('value', '')}\n\n"
                 
                 for child in children:
-                    md += tree_to_markdown(child)
+                    child_md = tree_to_markdown(child)
+                    if child_md:
+                        md += child_md
                     
                 return md
 
