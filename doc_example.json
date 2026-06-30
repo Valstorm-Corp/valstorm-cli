@@ -1,0 +1,76 @@
+[
+    {
+        "id": "97037a4f-e05d-4de0-85c9-99947479f968",
+        "name": "Quickstart",
+        "created_date": "2026-06-29T14:41:35.355000Z",
+        "modified_date": "2026-06-29T18:40:38.125000Z",
+        "created_by": {
+            "id": "3b4cfb0e-8258-40a8-81ca-3f16d1116861",
+            "name": "Jared Simpson",
+            "schema_id": "f5e6501e-f157-4c35-9a04-f9e00db883f4",
+            "schema_api_name": "user",
+            "schema_title": "User"
+        },
+        "modified_by": {
+            "id": "3b4cfb0e-8258-40a8-81ca-3f16d1116861",
+            "name": "Jared Simpson",
+            "schema_id": "f5e6501e-f157-4c35-9a04-f9e00db883f4",
+            "schema_api_name": "user",
+            "schema_title": "User"
+        },
+        "owner": {
+            "id": "3b4cfb0e-8258-40a8-81ca-3f16d1116861",
+            "name": "Jared Simpson",
+            "schema_api_name": "user",
+            "schema_id": "f5e6501e-f157-4c35-9a04-f9e00db883f4",
+            "schema_title": "User"
+        },
+        "slug": "quickstart",
+        "category": "Developers",
+        "version": "1.0.0",
+        "sort_order": 0.0,
+        "is_published": true,
+        "icon": null,
+        "seo_title": "Valstorm Developer Quickstart",
+        "seo_description": "Get started using the Valstorm platform for development by following this guide.\n",
+        "content": [
+            {
+                "id": 1,
+                "children": [
+                    {
+                        "id": "d24e27f9-b95c-43e4-bfc2-1be79abe4300",
+                        "children": [],
+                        "edges": [],
+                        "parent": 1,
+                        "props": {
+                            "api_name": "rich_text",
+                            "value": "# Quickstart Guide\n\nThis guide will help you get up and running with the Valstorm Developer Platform in minutes.\n\n## 1. Create a Valstorm Account\nIf you haven't already, sign up for a Valstorm account at [valstorm.com/register](https://valstorm.com/register).\n\n## 2. Install the Valstorm CLI\nThe Valstorm CLI is the primary tool for managing your local environment.\n\n```bash\nuv tool install git+https://github.com/Valstorm-Corp/valstorm-cli\n```\n\n## 3. Authenticate\nLog in to your account through the CLI:\n\n```bash\nvalstorm login\n```\n\n## 4. Initialize Your Project\nCreate a new project directory and initialize it:\n\n```bash\nmkdir my-valstorm-app\ncd my-valstorm-app\nvalstorm init\n```\n\n## 5. Pull Your Metadata\nFetch the latest schemas and objects from your organization:\n\n```bash\nvalstorm pull\n```\n\n## 6. Create a Sandbox\n\n```bash\nvalstorm sandbox create\n```\n\n## Explore the top endpoints\n1. [Create, Update Delete Records](./api/group/object)\n2. [Query Records](./api/v1/query/post)\n3. [The SQL Query Engine](./sql-query-engine)\n4. Once authenticated, explore the [Schemas](./objects/user)",
+                            "class_name": "",
+                            "category": "HTML",
+                            "component_type": "RichText",
+                            "schema_name": "rich_text"
+                        }
+                    }
+                ],
+                "edges": [],
+                "parent": null,
+                "props": {
+                    "api_name": "dropzone",
+                    "class_name": "min-h-[100px] flex flex-col p-0 gap-1 bg-gray-200 dark:bg-stone-800",
+                    "category": "Layouts",
+                    "component_type": "DropZone",
+                    "schema_name": "dropzone",
+                    "paper": false,
+                    "children": [],
+                    "id": "main-dropzone",
+                    "name": "Main Dropzone"
+                }
+            }
+        ],
+        "is_public": true,
+        "published_date": "2026-06-29T14:41:00Z",
+        "section": "Getting Started",
+        "shared_with": null,
+        "schema": "7caf70c9-eb6e-4c45-a3c4-6d328fa0f22f"
+    }
+]
