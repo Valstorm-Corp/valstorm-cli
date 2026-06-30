@@ -200,3 +200,92 @@ def remove_users(
     except Exception as e:
         console.print(f"[bold red]Failed to remove users:[/bold red] {str(e)}")
         raise typer.Exit(1)
+
+
+@sandbox_app.command("use")
+def use_sandbox(
+    name: str = typer.Argument(..., help="The name of the sandbox to switch to.")
+):
+    """
+    Switch the local workspace target to a specific sandbox.
+    """
+    from .auth import get_project_root, load_config
+    import json
+    
+    try:
+        root = get_project_root()
+    except Exception:
+        console.print("[bold red]Not in a Valstorm project directory.[/bold red]")
+        raise typer.Exit(1)
+        
+    config = load_config(root)
+    
+    # Optional: Verify sandbox actually exists in parent org by listing them
+    auth = _get_auth() # uses use_parent=True internally
+    base_url = get_api_base_url()
+    try:
+        res = httpx.get(
+            f"{base_url}/sandbox",
+            headers={"Authorization": f"Bearer {auth.access_token}"},
+            timeout=10.0
+        )
+        if res.status_code == 200:
+            sandboxes = res.json()
+            sandbox_names = [s.get("sandbox_name") for s in sandboxes if s.get("sandbox_name")]
+            if name not in sandbox_names:
+                console.print(f"[yellow]Warning: Sandbox '{name}' was not found in your organization.[/yellow]")
+                console.print(f"Available sandboxes: {', '.join(sandbox_names) or 'None'}")
+                if not typer.confirm("Do you want to switch to it anyway?"):
+                    raise typer.Exit(0)
+    except Exception:
+        pass # Handle gracefully if offline or request fails
+        
+    config["sandbox"] = name
+    
+    with open(root / "valstorm.json", "w") as f:
+        json.dump(config, f, indent=4)
+        
+    console.print(f"[bold green]✓ Switched workspace target to sandbox '{name}'[/bold green]")
+
+
+@sandbox_app.command("switch", hidden=True)
+def switch_sandbox(
+    name: str = typer.Argument(..., help="The name of the sandbox to switch to.")
+):
+    """
+    Alias for use.
+    """
+    use_sandbox(name)
+
+
+@sandbox_app.command("use-parent")
+def use_parent():
+    """
+    Switch the local workspace target back to the parent production/dev organization.
+    """
+    from .auth import get_project_root, load_config
+    import json
+    
+    try:
+        root = get_project_root()
+    except Exception:
+        console.print("[bold red]Not in a Valstorm project directory.[/bold red]")
+        raise typer.Exit(1)
+        
+    config = load_config(root)
+    if "sandbox" in config:
+        del config["sandbox"]
+        
+    with open(root / "valstorm.json", "w") as f:
+        json.dump(config, f, indent=4)
+        
+    console.print("[bold green]✓ Switched workspace target back to parent production/dev environment[/bold green]")
+
+
+@sandbox_app.command("switch-back", hidden=True)
+def switch_back():
+    """
+    Alias for use-parent.
+    """
+    use_parent()
+
