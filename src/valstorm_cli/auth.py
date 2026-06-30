@@ -259,7 +259,7 @@ class ValstormAuth:
         headers = {"Authorization": f"Bearer {parent_token}"}
         try:
             with httpx.Client(base_url=get_api_base_url(self.env), headers=headers, timeout=10.0) as client:
-                res = client.post("/switch", json={"id": sandbox_org_id})
+                res = client.post("switch", json={"id": sandbox_org_id})
                 if res.status_code == 200:
                     return res.json().get("access_token")
                 else:
@@ -290,7 +290,15 @@ class ValstormAuth:
                 console.print("[red]Could not extract parent organization ID from authentication token.[/red]")
                 return False
                 
-            sandbox_org_id = f"sandbox_{self.sandbox}_{parent_org_id}"
+            # Sanitize/generate api_name to match backend sandbox ID generation
+            import re
+            cleaned_sandbox = re.sub(r'[^a-zA-Z0-9_]', '', self.sandbox.lower().replace(" ", "_")).strip()
+            cleaned_sandbox = re.sub(r'_+', '_', cleaned_sandbox)
+            if not cleaned_sandbox:
+                cleaned_sandbox = "env"
+            api_name = cleaned_sandbox[:12]
+            
+            sandbox_org_id = f"{parent_org_id}_s_{api_name}"
             
             cached_sandbox_token = self._get_cached_sandbox_token(self.sandbox)
             if cached_sandbox_token:
