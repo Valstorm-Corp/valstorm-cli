@@ -259,7 +259,7 @@ class ValstormAuth:
         headers = {"Authorization": f"Bearer {parent_token}"}
         try:
             with httpx.Client(base_url=get_api_base_url(self.env), headers=headers, timeout=10.0) as client:
-                res = client.post("switch", json={"id": sandbox_org_id})
+                res = client.post("auth/switch", json={"id": sandbox_org_id})
                 if res.status_code == 200:
                     return res.json().get("access_token")
                 else:
