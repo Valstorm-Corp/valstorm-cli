@@ -9,6 +9,22 @@ from rich.console import Console
 import httpx
 console = Console()
 
+def decode_jwt_payload(token: str) -> dict:
+    import base64
+    import json
+    try:
+        parts = token.split('.')
+        if len(parts) != 3:
+            return {}
+        payload_b64 = parts[1]
+        padding = len(payload_b64) % 4
+        if padding:
+            payload_b64 += "=" * (4 - padding)
+        payload_bytes = base64.urlsafe_b64decode(payload_b64)
+        return json.loads(payload_bytes.decode('utf-8'))
+    except Exception:
+        return {}
+
 # Configuration
 ENVIRONMENTS = {
     "prod": "https://api.valstorm.com",
@@ -49,6 +65,11 @@ def get_profile() -> str:
     config = _load_workspace_config()
     return config.get("profile", "default").lower()
 
+def get_sandbox() -> Optional[str]:
+    config = _load_workspace_config()
+    val = config.get("sandbox")
+    return val.lower() if val else None
+
 def get_base_url(env: str = None) -> str:
     env = env or get_env()
     return ENVIRONMENTS.get(env, ENVIRONMENTS["prod"])
@@ -82,9 +103,10 @@ def get_auth_file(env: str, profile: str) -> Path:
 class ValstormAuth:
     _validation_cache = {} # (env, profile) -> bool
 
-    def __init__(self, profile: str = None, env: str = None):
+    def __init__(self, profile: str = None, env: str = None, use_parent: bool = False):
         self.profile = profile or get_profile()
         self.env = env or get_env()
+        self.sandbox = None if use_parent else get_sandbox()
         self.access_token = None
         self.refresh_token = None
         self.organization_name = None
@@ -172,8 +194,120 @@ class ValstormAuth:
             # print(f"Error refreshing token: {e}", file=sys.stderr)
             return False
 
+    def _get_cached_sandbox_token(self, sandbox_name: str) -> Optional[str]:
+        if self.auth_file.exists():
+            try:
+                data = json.loads(self.auth_file.read_text())
+                sandboxes = data.get("sandboxes", {})
+                sandbox_data = sandboxes.get(sandbox_name, {})
+                expires_at_str = sandbox_data.get("expires_at")
+                if expires_at_str:
+                    import datetime
+                    expires_at = datetime.datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+                    if datetime.datetime.now(datetime.timezone.utc) > expires_at:
+                        return None
+                return sandbox_data.get("access_token")
+            except Exception:
+                pass
+        return None
+
+    def _save_sandbox_token(self, sandbox_name: str, token: str):
+        payload = decode_jwt_payload(token)
+        expires_at = None
+        if payload.get("exp"):
+            import datetime
+            expires_at = datetime.datetime.fromtimestamp(payload["exp"], datetime.timezone.utc).isoformat()
+            
+        try:
+            self.auth_file.parent.mkdir(parents=True, exist_ok=True)
+            data = {}
+            if self.auth_file.exists():
+                try:
+                    data = json.loads(self.auth_file.read_text())
+                except Exception:
+                    pass
+            
+            data["access_token"] = data.get("access_token", self.access_token)
+            data["refresh_token"] = data.get("refresh_token", self.refresh_token)
+            data["organization_name"] = data.get("organization_name", self.organization_name)
+            data["default_app_id"] = data.get("default_app_id", self.default_app_id)
+            
+            if "sandboxes" not in data:
+                data["sandboxes"] = {}
+                
+            data["sandboxes"][sandbox_name] = {
+                "access_token": token,
+                "expires_at": expires_at
+            }
+            
+            temp_file = self.auth_file.with_suffix(".tmp")
+            temp_file.write_text(json.dumps(data, indent=2))
+            temp_file.replace(self.auth_file)
+        except Exception as e:
+            print(f"Error saving sandbox token: {e}", file=sys.stderr)
+
+    def _validate_sandbox_token(self, token: str) -> bool:
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            with httpx.Client(base_url=get_api_base_url(self.env), headers=headers, timeout=5.0) as client:
+                res = client.get("/auth/load")
+                return res.status_code == 200
+        except Exception:
+            return False
+
+    def _switch_to_sandbox_org(self, parent_token: str, sandbox_org_id: str) -> Optional[str]:
+        headers = {"Authorization": f"Bearer {parent_token}"}
+        try:
+            with httpx.Client(base_url=get_api_base_url(self.env), headers=headers, timeout=10.0) as client:
+                res = client.post("/switch", json={"id": sandbox_org_id})
+                if res.status_code == 200:
+                    return res.json().get("access_token")
+                else:
+                    console.print(f"[yellow]Switch organization failed ({res.status_code}): {res.text}[/yellow]")
+        except Exception as e:
+            console.print(f"[red]Error connecting to API to switch organization: {e}[/red]")
+        return None
+
     def ensure_valid_token(self) -> bool:
         """Checks if the token is valid, attempting to refresh if it's not."""
+        if self.sandbox:
+            # 1. Validate parent token first
+            parent_auth = ValstormAuth(profile=self.profile, env=self.env, use_parent=True)
+            if not parent_auth.ensure_valid_token():
+                return False
+            
+            # Since parent_auth may have refreshed the parent token, we reload our tokens
+            self._load_tokens()
+            parent_token = parent_auth.access_token
+            if not parent_token:
+                console.print("[red]Could not retrieve parent authentication token.[/red]")
+                return False
+            
+            # 2. Get sandbox token
+            parent_payload = decode_jwt_payload(parent_token)
+            parent_org_id = parent_payload.get("org")
+            if not parent_org_id:
+                console.print("[red]Could not extract parent organization ID from authentication token.[/red]")
+                return False
+                
+            sandbox_org_id = f"sandbox_{self.sandbox}_{parent_org_id}"
+            
+            cached_sandbox_token = self._get_cached_sandbox_token(self.sandbox)
+            if cached_sandbox_token:
+                if self._validate_sandbox_token(cached_sandbox_token):
+                    self.access_token = cached_sandbox_token
+                    return True
+            
+            console.print(f"Authenticating into sandbox [bold cyan]{self.sandbox}[/bold cyan]...")
+            new_sandbox_token = self._switch_to_sandbox_org(parent_token, sandbox_org_id)
+            if new_sandbox_token:
+                self._save_sandbox_token(self.sandbox, new_sandbox_token)
+                self.access_token = new_sandbox_token
+                return True
+            else:
+                console.print(f"[red]Failed to authenticate into sandbox '{self.sandbox}'.[/red]")
+                return False
+
         cache_key = (self.env, self.profile)
         if ValstormAuth._validation_cache.get(cache_key):
             console.print(f"[green]Token for profile '{self.profile}' in environment '{self.env}' is valid (cached).[/green]")
@@ -232,7 +366,7 @@ def load_config(root: Path) -> dict:
     with open(root / "valstorm.json", "r") as f:
         return json.load(f)
 
-def get_auth(profile: Optional[str] = None, env: Optional[str] = None) -> 'ValstormAuth':
+def get_auth(profile: Optional[str] = None, env: Optional[str] = None, use_parent: bool = False) -> 'ValstormAuth':
     auth_profile = profile
     auth_env = env
 
@@ -247,4 +381,4 @@ def get_auth(profile: Optional[str] = None, env: Optional[str] = None) -> 'Valst
         except Exception:
             pass
 
-    return ValstormAuth(profile=auth_profile, env=auth_env)
+    return ValstormAuth(profile=auth_profile, env=auth_env, use_parent=use_parent)

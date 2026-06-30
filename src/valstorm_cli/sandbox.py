@@ -11,7 +11,7 @@ users_app = typer.Typer(help="Manage users in a sandbox.")
 sandbox_app.add_typer(users_app, name="users")
 
 def _get_auth() -> ValstormAuth:
-    auth = ValstormAuth()
+    auth = ValstormAuth(use_parent=True)
     if not auth.ensure_valid_token():
         console.print("[bold red]Not authenticated or failed to refresh.[/bold red] Run 'valstorm login' first.")
         raise typer.Exit(1)

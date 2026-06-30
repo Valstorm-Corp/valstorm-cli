@@ -470,7 +470,7 @@ def push_sandbox_app(
     """
     Push a sandbox app deployment to a specified target environment.
     """
-    auth = get_auth(profile=profile, env=env)
+    auth = get_auth(profile=profile, env=env, use_parent=True)
     
     if not auth.ensure_valid_token():
         console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
@@ -526,7 +526,7 @@ def deploy_marketplace(
     """
     Deploy the current app state to the Marketplace (Base database).
     """
-    auth = get_auth(profile=profile, env=env)
+    auth = get_auth(profile=profile, env=env, use_parent=True)
     if not auth.ensure_valid_token():
         console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
         raise typer.Exit(1)
@@ -562,7 +562,7 @@ def deploy_next_env(
     """
     Deploy the app to the next environment.
     """
-    auth = get_auth(profile=profile, env=env)
+    auth = get_auth(profile=profile, env=env, use_parent=True)
     if not auth.ensure_valid_token():
         console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
         raise typer.Exit(1)
@@ -597,7 +597,7 @@ def apply_subscribers(
     """
     Apply app updates to all subscribers.
     """
-    auth = get_auth(profile=profile, env=env)
+    auth = get_auth(profile=profile, env=env, use_parent=True)
     if not auth.ensure_valid_token():
         console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
         raise typer.Exit(1)
