@@ -48,12 +48,26 @@ def pull(
 
     # 2. Define target types
     manifest_data = None
+    manifest_file_path = None
+    
+    try:
+        with open(root / "valstorm.json", "r") as f:
+            config = json.load(f)
+    except Exception:
+        config = {}
+        
     if manifest:
-        manifest_path = Path(manifest)
-        if not manifest_path.exists():
-            console.print(f"[bold red]Manifest file not found:[/bold red] {manifest}")
+        manifest_file_path = Path(manifest)
+    elif "manifest" in config:
+        manifest_file_path = root / config["manifest"]
+    elif (root / "manifest.json").exists():
+        manifest_file_path = root / "manifest.json"
+        
+    if manifest_file_path:
+        if not manifest_file_path.exists():
+            console.print(f"[bold red]Manifest file not found:[/bold red] {manifest_file_path}")
             raise typer.Exit(1)
-        with open(manifest_path, "r") as f:
+        with open(manifest_file_path, "r") as f:
             manifest_data = json.load(f).get("objects", {})
         target_types = [t for t in manifest_data.keys() if t in available_schemas]
     elif object_type:
@@ -62,18 +76,12 @@ def pull(
             raise typer.Exit(1)
         target_types = [object_type]
     else:
-        try:
-            with open(root / "valstorm.json", "r") as f:
-                config = json.load(f)
-        except Exception:
-            config = {}
-            
         configured_objects = config.get("objects")
         
         if configured_objects:
             target_types = [t for t in configured_objects if t in available_schemas]
         else:
-            core_types = ["record_trigger", "function"]
+            core_types = ["record_trigger", "function", "automation"]
             metadata_types = [
                 "ai_agent", "app", "app_page", "app_metadata", 
                 "permission", "notification_setting", 
@@ -252,12 +260,26 @@ def push(
 
     # Identify which types we have locally
     manifest_data = None
+    manifest_file_path = None
+    
+    try:
+        with open(root / "valstorm.json", "r") as f:
+            config = json.load(f)
+    except Exception:
+        config = {}
+        
     if manifest:
-        manifest_path = Path(manifest)
-        if not manifest_path.exists():
-            console.print(f"[bold red]Manifest file not found:[/bold red] {manifest}")
+        manifest_file_path = Path(manifest)
+    elif "manifest" in config:
+        manifest_file_path = root / config["manifest"]
+    elif (root / "manifest.json").exists():
+        manifest_file_path = root / "manifest.json"
+        
+    if manifest_file_path:
+        if not manifest_file_path.exists():
+            console.print(f"[bold red]Manifest file not found:[/bold red] {manifest_file_path}")
             raise typer.Exit(1)
-        with open(manifest_path, "r") as f:
+        with open(manifest_file_path, "r") as f:
             manifest_data = json.load(f).get("objects", {})
         types = [t for t in manifest_data.keys() if (object_root / t).exists()]
     elif api_name:
@@ -266,14 +288,9 @@ def push(
         types = [d.name for d in object_root.iterdir() if d.is_dir() and not d.name.startswith(".")]
         
         # Filter types by configuration if present
-        try:
-            with open(root / "valstorm.json", "r") as f:
-                config = json.load(f)
-                configured_objects = config.get("objects")
-                if configured_objects:
-                    types = [t for t in types if t in configured_objects]
-        except Exception:
-            pass
+        configured_objects = config.get("objects")
+        if configured_objects:
+            types = [t for t in types if t in configured_objects]
     
     if not types:
         console.print("[yellow]No object types found in 'object' directory.[/yellow]")

@@ -153,8 +153,9 @@ def init(
     config = {
         "env": auth.env,
         "profile": auth.profile,
+        "manifest": "manifest.json",
         "objects": [
-            "record_trigger", "function", "ai_agent", "app", 
+            "record_trigger", "function", "automation", "ai_agent", "app", 
             "app_page", "app_metadata", "permission", 
             "notification_setting", "schedule_trigger_setting", "workspace"
         ]
@@ -162,6 +163,27 @@ def init(
     
     with open(target_path / "valstorm.json", "w") as f:
         json.dump(config, f, indent=4)
+
+    # 1.0.1 Create default manifest.json
+    default_manifest = {
+        "version": "1.0",
+        "description": "Default deployment manifest",
+        "objects": {
+            "record_trigger": "*",
+            "function": "*",
+            "automation": "*",
+            "ai_agent": "*",
+            "app": "*",
+            "app_page": "*",
+            "app_metadata": "*",
+            "permission": "*",
+            "notification_setting": "*",
+            "schedule_trigger_setting": "*",
+            "workspace": "*"
+        }
+    }
+    with open(target_path / "manifest.json", "w") as f:
+        json.dump(default_manifest, f, indent=4)
 
     # 1.1 Create pyproject.toml for the new project
     toml_content = f"""[project]
