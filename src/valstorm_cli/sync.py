@@ -153,11 +153,11 @@ def pull(
                 
                 with open(target_dir / f"{safe_name}_{record_id}.json", "w") as f:
                     json.dump(record, f, indent=4)
-                file_name = record.get("file_name")
+                rec_file_name = record.get("file_name")
                 code = record.get("code")
                 
-                if file_name and code:
-                    file_path = target_dir / file_name
+                if rec_file_name and code:
+                    file_path = target_dir / rec_file_name
                     
                     # Check if local file exists and has different content
                     if file_path.exists() and not force:
@@ -165,14 +165,14 @@ def pull(
                             local_code = f.read()
                         if local_code != code:
                             choice = typer.prompt(
-                                f"Local changes detected in {file_name}. Overwrite? [y/N/a] (a=all)",
+                                f"Local changes detected in {rec_file_name}. Overwrite? [y/N/a] (a=all)",
                                 default="n"
                             ).lower()
                             
                             if choice == 'a':
                                 force = True
                             elif choice != 'y':
-                                console.print(f"Skipping {file_name}")
+                                console.print(f"Skipping {rec_file_name}")
                                 continue
                     
                     with open(file_path, "w") as f:
