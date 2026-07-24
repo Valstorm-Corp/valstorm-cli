@@ -46,7 +46,16 @@ def pull(
             raise typer.Exit(1)
         available_schemas = schema_res.json()
 
-    # 2. Define target types
+    # 2. Define the union of platform system types and custom object schemas
+    SYSTEM_TYPES = {
+        "record_trigger", "function", "automation", "ai_agent", "app", 
+        "app_page", "app_metadata", "permission", "notification_setting", 
+        "schedule_trigger_setting", "workspace"
+    }
+    schemas_set = set(available_schemas.keys() if isinstance(available_schemas, dict) else available_schemas)
+    allowed_types = SYSTEM_TYPES.union(schemas_set)
+
+    # 3. Define target types
     manifest_data = None
     manifest_file_path = None
     
@@ -69,9 +78,9 @@ def pull(
             raise typer.Exit(1)
         with open(manifest_file_path, "r") as f:
             manifest_data = json.load(f).get("objects", {})
-        target_types = [t for t in manifest_data.keys() if t in available_schemas]
+        target_types = [t for t in manifest_data.keys() if t in allowed_types]
     elif object_type:
-        if object_type not in available_schemas:
+        if object_type not in allowed_types:
             console.print(f"[bold red]Error:[/bold red] Object type '{object_type}' not found in schemas.")
             raise typer.Exit(1)
         target_types = [object_type]
@@ -79,7 +88,7 @@ def pull(
         configured_objects = config.get("objects")
         
         if configured_objects:
-            target_types = [t for t in configured_objects if t in available_schemas]
+            target_types = [t for t in configured_objects if t in allowed_types]
         else:
             core_types = ["record_trigger", "function", "automation"]
             metadata_types = [
@@ -87,7 +96,7 @@ def pull(
                 "permission", "notification_setting", 
                 "schedule_trigger_setting", "workspace"
             ]
-            target_types = [t for t in (core_types + metadata_types) if t in available_schemas]
+            target_types = [t for t in (core_types + metadata_types) if t in allowed_types]
     
     if not target_types:
         console.print("[yellow]No matching objects found in schemas to pull records for.[/yellow]")
