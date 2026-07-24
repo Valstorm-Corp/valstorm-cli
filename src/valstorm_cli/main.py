@@ -430,6 +430,75 @@ deploy_app_group = typer.Typer(help="Manage App deployments.")
 deploy_app.add_typer(deploy_app_group, name="app")
 app.add_typer(deploy_app, name="deploy")
 
+@deploy_app.command(name="manifest")
+def deploy_manifest_command(
+    manifest_path: str = typer.Argument(..., help="Path to the deployment manifest JSON file."),
+    profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Validate manifest assets without deploying them.")
+):
+    """
+    Deploy specific metadata assets defined in a manifest file to any environment.
+    """
+    import json
+    from pathlib import Path
+    
+    path = Path(manifest_path)
+    if not path.exists():
+        console.print(f"[bold red]Error:[/bold red] Manifest file not found: {manifest_path}")
+        raise typer.Exit(1)
+        
+    try:
+        with open(path, "r") as f:
+            manifest_data = json.load(f)
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] Failed to parse manifest JSON: {e}")
+        raise typer.Exit(1)
+        
+    console.print(f"Deploying manifest [cyan]{manifest_path}[/cyan]...")
+    
+    if dry_run:
+        console.print("[yellow]Dry Run Mode Enabled: Validating local manifest contents...[/yellow]")
+        from rich.table import Table
+        table = Table(title="Assets Checked (Ready for Deployment)")
+        table.add_column("Type", style="cyan")
+        table.add_column("Asset", style="green")
+        table.add_column("Status", style="yellow")
+        
+        objects = manifest_data.get("objects", {})
+        schemas = manifest_data.get("schemas", [])
+        
+        for file_type, files in objects.items():
+            for f_name in files:
+                # check if file exists under object/{file_type}/{f_name}
+                local_f = Path("object") / file_type / f_name
+                # Check for companion code/meta files
+                if local_f.exists():
+                    status_str = "Found (Local)"
+                else:
+                    status_str = "Not Found Locally (Will be skipped or queried)"
+                table.add_row(file_type, f_name, status_str)
+                
+        for s_name in schemas:
+            local_s = Path("schemas") / f"{s_name}.json"
+            if local_s.exists():
+                status_str = "Found (Local)"
+            else:
+                status_str = "Not Found Locally (Will be skipped)"
+            table.add_row("schema", s_name, status_str)
+            
+        console.print(table)
+        console.print("[green]✓ Validation passed. Ready to deploy.[/green]")
+        return
+        
+    # Delegate to the metadata sync push engine
+    from .sync import push
+    try:
+        push(manifest=str(path), profile=profile, env=env)
+    except Exception as e:
+        console.print(f"[bold red]Deployment failed:[/bold red] {e}")
+        raise typer.Exit(1)
+
 def get_app_id_by_name(auth, api_base_url, app_name: str) -> str:
     """Helper to lookup an app ID by its name."""
     response = httpx.get(
@@ -459,6 +528,70 @@ def get_app_id_by_name(auth, api_base_url, app_name: str) -> str:
     raise typer.Exit(1)
 
 
+@deploy_app_group.command(name="local")
+def deploy_app_local(
+    app_config: str = typer.Option("app.json", "--config", "-c", help="Path to app.json configuration."),
+    profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
+):
+    """
+    Compile and deploy an application from local source files directly to the target environment.
+    """
+    from pathlib import Path
+    from .bundler import bundle_local_app
+    
+    try:
+        root = get_project_root()
+    except Exception:
+        console.print("[bold red]Error:[/bold red] Must be run inside a Valstorm project.")
+        raise typer.Exit(1)
+        
+    config_path = root / app_config
+    if not config_path.exists():
+        console.print(f"[bold red]Error:[/bold red] Application config not found at: {app_config}")
+        raise typer.Exit(1)
+        
+    auth = get_auth(profile=profile, env=env, use_parent=True)
+    if not auth.ensure_valid_token():
+        console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
+        raise typer.Exit(1)
+        
+    api_base_url = get_api_base_url(env=env)
+    
+    console.print(f"Assembling local app bundle from [cyan]{app_config}[/cyan]...")
+    try:
+        app_bundle = bundle_local_app(config_path, root)
+    except Exception as e:
+        console.print(f"[bold red]Failed to assemble app bundle:[/bold red] {e}")
+        raise typer.Exit(1)
+        
+    console.print(f"Deploying app [green]{app_bundle['name']}[/green] ([dim]{app_bundle['id']}[/dim]) directly to environment [blue]{get_api_base_url(auth.env)}[/blue]...")
+    
+    # PUT the compiled bundle to `/apps/deploy` as expected by receive_app_deploy
+    url = f"{api_base_url}/apps/deploy"
+    
+    try:
+        response = httpx.put(
+            url,
+            json=app_bundle,
+            headers={"Authorization": f"Bearer {auth.access_token}"},
+            timeout=180.0
+        )
+        if response.status_code == 200:
+            console.print("[bold green]✓ Local application deployed successfully![/bold green]")
+            try:
+                from rich.json import JSON
+                console.print(JSON.from_data(response.json()))
+            except Exception:
+                console.print(response.text)
+        else:
+            console.print(f"[bold red]Deployment failed ({response.status_code}):[/bold red] {response.text}")
+            raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Error connecting to API:[/bold red] {str(e)}")
+        raise typer.Exit(1)
+
+
 @deploy_app_group.command(name="sandbox")
 def push_sandbox_app(
     sandbox_name: str = typer.Argument(..., help="The name of the sandbox environment."),
@@ -478,19 +611,42 @@ def push_sandbox_app(
         
     api_base_url = get_api_base_url(env=env)
     
+    target_val = target
+    if not target_val:
+        try:
+            if auth.auth_file.exists():
+                import json
+                auth_data = json.loads(auth.auth_file.read_text())
+                target_val = auth_data.get("user", {}).get("organization_id", "").split('_s_')[0]
+        except Exception:
+            pass
+            
+        if not target_val:
+            try:
+                response = httpx.get(
+                    f"{api_base_url}/auth/load",
+                    headers={"Authorization": f"Bearer {auth.access_token}"},
+                    timeout=10.0
+                )
+                if response.status_code == 200:
+                    target_val = response.json().get("user", {}).get("organization_id", "").split('_s_')[0]
+            except Exception:
+                pass
+                
+    if not target_val:
+        console.print("[bold red]Error:[/bold red] Could not determine target parent organization. Please specify '--target' explicitly.")
+        raise typer.Exit(1)
+        
     try:
         # Execute POST Push
-        url = f"{api_base_url}/sandbox/{sandbox_name}/app/{app_name}/push"
-        params = {}
+        url = f"{api_base_url}/sandbox/{sandbox_name}/app/{app_name}/push/{target_val}"
         if target:
-            params["target"] = target
             console.print(f"Pushing app [blue]{app_name}[/blue] from sandbox [blue]{sandbox_name}[/blue] to target [green]{target}[/green]...")
         else:
-            console.print(f"Pushing app [blue]{app_name}[/blue] from sandbox [blue]{sandbox_name}[/blue] to parent environment...")
+            console.print(f"Pushing app [blue]{app_name}[/blue] from sandbox [blue]{sandbox_name}[/blue] to parent environment [green]{target_val}[/green]...")
             
         response = httpx.post(
             url, 
-            params=params, 
             headers={"Authorization": f"Bearer {auth.access_token}"},
             timeout=120.0
         )
@@ -656,5 +812,69 @@ def generate_manifest(name: str = typer.Argument(..., help="The name of the mani
         json.dump(boilerplate, f, indent=4)
         
     console.print(f"[bold green]✓ Generated manifest:[/bold green] {file_path}")
+
+
+@manifest_app.command(name="diff")
+def manifest_diff(
+    ref: Optional[str] = typer.Argument(None, help="Git reference (branch, commit, etc.) to diff against. If omitted, diffs uncommitted changes."),
+    output: str = typer.Option("manifests/diff_deployment.json", "--output", "-o", help="Target output manifest file path."),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing manifest without asking.")
+):
+    """
+    Generate a deployment manifest from local git differences (committed or uncommitted).
+    """
+    try:
+        from .git_utils import get_git_diff_files, get_git_root
+        from .manifest_builder import build_manifest_from_files
+    except ImportError as e:
+        console.print(f"[bold red]Failed to import manifest builders:[/bold red] {e}")
+        raise typer.Exit(1)
+        
+    try:
+        root = get_git_root()
+        files = get_git_diff_files(ref)
+    except Exception as e:
+        console.print(f"[bold red]Git Error:[/bold red] {e}")
+        raise typer.Exit(1)
+        
+    if not files:
+        console.print("[yellow]No local changes detected. Manifest will be empty.[/yellow]")
+        raise typer.Exit(0)
+        
+    manifest = build_manifest_from_files(files, root)
+    
+    out_path = root / output
+    out_path.parent.mkdir(exist_ok=True)
+    
+    if out_path.exists() and not force:
+        if not typer.confirm(f"Manifest at {output} already exists. Overwrite?"):
+            raise typer.Exit(0)
+            
+    with open(out_path, "w") as f:
+        json.dump(manifest, f, indent=4)
+        
+    console.print(f"[bold green]✓ Manifest generated successfully![/bold green] Saved to: [cyan]{output}[/cyan]")
+    
+    # Render table of identified items
+    from rich.table import Table
+    table = Table(title="Identified Deployment Assets")
+    table.add_column("Type", style="cyan")
+    table.add_column("Asset Name", style="green")
+    
+    has_assets = False
+    for obj_type, assets in manifest.get("objects", {}).items():
+        for asset in assets:
+            table.add_row(obj_type, asset)
+            has_assets = True
+            
+    for schema in manifest.get("schemas", []):
+        table.add_row("schema", schema)
+        has_assets = True
+        
+    if has_assets:
+        console.print(table)
+    else:
+        console.print("[yellow]No Valstorm metadata objects or schemas identified in the changes.[/yellow]")
+
 
 

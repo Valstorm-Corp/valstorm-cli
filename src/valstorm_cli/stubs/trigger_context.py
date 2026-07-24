@@ -11,7 +11,7 @@ class TriggerTransaction: pass
 class PlatformContext: pass
 class Request: pass
 
-from .platform_context import BaseContext, RecordContext, QueryContext, SchemaContext, TaskContext, FileContext, TwilioContext, NotificationContext, CommunicationContext, WorkflowContext, MetadataContext, SalesforceContext, GoogleContext, AgentContext, MicrosoftContext, IntegrationContext, UtilsContext, FormulaContext, RollupContext, ExceptionContext, PlatformContext
+from .platform_context import BaseContext, RecordContext, QueryContext, SchemaContext, TaskContext, FileContext, TwilioContext, NotificationContext, CommunicationContext, WorkflowContext, MetadataContext, SalesforceContext, GoogleContext, AgentContext, IntegrationContext, UtilsContext, FormulaContext, RollupContext, ExceptionContext, PlatformContext
 import time
 import contextvars
 from typing import Dict, List, Set, Optional, Any
@@ -99,6 +99,9 @@ class RecordTriggerContext:
         pass
 
     def is_changed(self, record_id: str, field: str) -> bool:
+        pass
+
+    def get_schema_from_id(self, record_id: str) -> Optional[str]:
         pass
 
     def get_list(self) -> List[Dict]:

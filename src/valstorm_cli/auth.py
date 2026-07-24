@@ -29,13 +29,17 @@ def decode_jwt_payload(token: str) -> dict:
 ENVIRONMENTS = {
     "prod": "https://api.valstorm.com",
     "dev": "https://api-dev.valstorm.com",
-    "local": "http://localhost:8010"
+    "local": "http://localhost:8010",
+    "blue": "http://localhost:8011",
+    "green": "http://localhost:8021"
 }
 
 WEB_ENVIRONMENTS = {
     "prod": "https://app.valstorm.com",
     "dev": "https://app-dev.valstorm.com",
-    "local": "http://localhost:3000"
+    "local": "http://localhost:3000",
+    "blue": "http://localhost:3000",
+    "green": "http://localhost:3000"
 }
 
 def _load_workspace_config() -> dict:

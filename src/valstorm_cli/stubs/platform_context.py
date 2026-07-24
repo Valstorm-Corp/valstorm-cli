@@ -217,7 +217,7 @@ class GoogleContext(BaseContext):
     """Context for Google Workspace operations."""
 
     async def _get_workspace(self, **kwargs):
-        """Returns an initialized GoogleWorkspace instance."""
+        """Returns an initialized GoogleWorkspaceService instance."""
         pass
 
     async def fetch_drive_files_concurrently(self, file_ids: List[str]):
@@ -252,6 +252,10 @@ Automatically handles exporting Google Workspace documents to text/plain."""
         """Modifies the labels on the specified Gmail thread."""
         pass
 
+    async def send_email(self, data: Union[dict, Any], **kwargs):
+        """Sends an email using standard Gmail integration, routing automatically."""
+        pass
+
 class AgentContext(BaseContext):
     """Context for inter-agent communication."""
 
@@ -262,22 +266,8 @@ Args:
     agent_id (str): The ID of the target agent to call.
     message (str): The instruction or message to send to the agent."""
         pass
-
-class MicrosoftContext(BaseContext):
-    """Context for Microsoft 365 operations."""
-
-    async def get_event_mapper(self):
-        """Returns an initialized MicrosoftEventToEventMapper-like interface."""
-        pass
-
-    async def send_email(self, subject: str, to_recipients: list, body_content: str, is_html: bool=True, **kwargs):
-        """Send an email via Microsoft Graph API."""
-        pass
-
-    async def reply_to_email(self, message_id: str, comment: str, to_recipients: list=None):
-        """Reply to an existing email via Microsoft Graph API."""
-        pass
 from .stripe_context import StripeContext
+from valstorm_platform.microsoft_context import MicrosoftContext
 
 class IntegrationContext(BaseContext):
     """Context grouping all external integrations."""

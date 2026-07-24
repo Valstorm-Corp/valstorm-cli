@@ -17,6 +17,22 @@ from typing import Optional, List, Union, Literal, Dict, Any, Annotated
 from datetime import datetime, timezone
 from uuid import uuid4
 from google.genai import types
+import re
+import string
+import secrets
+from typing import Annotated
+from pydantic import AfterValidator
+PREFIXED_ID_REGEX = re.compile('^[a-z]{2,4}_[a-zA-Z0-9\\-]{16,36}$')
+
+def generate_base62_id(prefix: str) -> str:
+    pass
+
+def validate_prefixed_id(v: str) -> str:
+    pass
+PrefixedID = Annotated[str, AfterValidator(validate_prefixed_id)]
+
+def SystemPrefixedID() -> str:
+    pass
 system_fields = ['id', 'name', 'created_date', 'modified_date', 'created_by', 'modified_by', 'schema', 'owner', 'shared_with']
 
 def ensure_utc(dt: datetime) -> datetime:
@@ -112,7 +128,7 @@ class FunctionCallPayload(BetterBaseModel):
     kwargs: Dict[str, Any]
 
 class PromptTemplatePayload(BetterBaseModel):
-    id: str
+    id: PrefixedID
 
 class AssignmentPayload(BetterBaseModel):
     target_variable: str
@@ -200,45 +216,17 @@ class Phone(BetterBaseModel):
     def force_string(cls, v: Any) -> str:
         pass
 
-class Lookup(BetterBaseModel):
-    id: Optional[str] = None
-    name: Optional[str] = None
-    schema_id: Optional[str] = None
-    schema_api_name: Optional[str] = None
-    schema_title: Optional[str] = None
-
-class StrictLookup(BetterBaseModel):
-    id: str
-    name: str
-    schema_id: str
-    schema_api_name: str
-    schema_title: str
-
-class UserLookup(BetterBaseModel):
-    id: str
-    name: str
-    schema_id: str = 'f5e6501e-f157-4c35-9a04-f9e00db883f4'
-    schema_api_name: str = 'user'
-    schema_title: str = 'User'
-
 class SharingAccess(str, Enum):
     READ = 'read'
     EDIT = 'edit'
     DELETE = 'delete'
 
 class Sharing(BetterBaseModel):
-    user: Optional[UserLookup] = Field(default=None, json_schema_extra={'format': 'lookup', 'schema': 'user', 'title': 'User'})
+    user: Optional[PrefixedID] = Field(default=None, json_schema_extra={'format': 'lookup', 'schema': 'user', 'title': 'User'})
     access: SharingAccess = Field(default=SharingAccess.READ, title='Access Level')
 
-class SystemLookup(BetterBaseModel):
-    id: str = 'System'
-    name: str = 'System'
-    schema_id: str = 'f5e6501e-f157-4c35-9a04-f9e00db883f4'
-    schema_api_name: str = 'user'
-    schema_title: str = 'User'
-
 class ReadNotificationData(BetterBaseModel):
-    id: str
+    id: PrefixedID
     type: str = 'send read'
     old_type: str
     user_id: str
@@ -331,7 +319,7 @@ class LicenseFeature(str, Enum):
     LIVE_CHAT = 'live_chat'
 
 class UserLicense(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('lic'))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     created_by: dict = {}
@@ -346,12 +334,12 @@ class UserLicense(BetterBaseModel):
     features: List[LicenseFeature] = []
 
 class User(BetterBaseModel):
-    id: str
-    created_by: dict = {}
-    modified_by: dict = {}
+    id: PrefixedID
+    created_by: Optional[PrefixedID] = None
+    modified_by: Optional[PrefixedID] = None
     created_date: Optional[datetime] = None
     modified_date: Optional[datetime] = None
-    owner: Optional[dict] = None
+    owner: Optional[PrefixedID] = None
     email: EmailStr
     first_name: Optional[str] = None
     last_name: Optional[str] = None
@@ -371,8 +359,8 @@ class User(BetterBaseModel):
     phone: Optional[Phone] = None
     organizations: list = []
     do_not_disturb: bool = False
-    role: Optional[dict] = None
-    manager: Optional[dict] = None
+    role: Optional[PrefixedID] = None
+    manager: Optional[PrefixedID] = None
     availability: Optional[UserAvailability] = UserAvailability()
     integration_user: Optional[bool] = False
     is_impersonating: bool = False
@@ -389,23 +377,23 @@ class User(BetterBaseModel):
     portal_id: Optional[str] = None
 
 class UserCreate(User):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('user'))
     password: str
 
 class OrganizationBase(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('org'))
     name: str
     created_date: Optional[str] = datetime.now().isoformat()
     modified_date: Optional[str] = datetime.now().isoformat()
     is_active: bool = True
 
 class Organization(OrganizationBase):
-    id: str
+    id: PrefixedID
     is_active: bool = True
     created_date: Optional[datetime] = None
     modified_date: Optional[datetime] = None
-    created_by: SystemLookup | UserLookup | Lookup | Dict
-    modified_by: SystemLookup | UserLookup | Lookup | Dict
+    created_by: PrefixedID | Dict
+    modified_by: PrefixedID | Dict
     website: Optional[str] = None
     description: Optional[str] = None
     address: dict = {}
@@ -416,12 +404,12 @@ class Organization(OrganizationBase):
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
 
 class StandardBase(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('obj'))
     name: str
-    created_date: datetime
-    modified_date: datetime
-    created_by: dict = Field(default=None, json_schema_extra={'default': None, 'format': 'lookup', 'modify': False, 'schema': 'user', 'system': True, 'title': 'Created By', 'type': 'json'})
-    modified_by: dict = Field(default=None, json_schema_extra={'default': None, 'format': 'lookup', 'modify': False, 'schema': 'user', 'system': True, 'title': 'Modified By', 'type': 'json'})
+    created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
+    modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
+    created_by: PrefixedID
+    modified_by: PrefixedID
 
 class ObjectFieldPermissions(BaseModel):
     model_config = ConfigDict(extra='allow')
@@ -444,10 +432,11 @@ class PermissionMap(BaseModel):
     scopes: List[str] = []
 
 class Permission(StandardBase):
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('per'))
     model_config = ConfigDict(extra='allow')
     object_field_permissions: Optional[dict] = {}
     object_permissions: Optional[dict] = {}
-    app: dict = {}
+    app: PrefixedID
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
     scopes: List[str] = []
 
@@ -456,12 +445,12 @@ class StandardOwnership(StandardBase):
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
 
 class App(StandardBase):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('app'))
     name: str
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
-    created_by: Lookup
-    modified_by: Lookup
+    created_by: PrefixedID
+    modified_by: PrefixedID
     version: str = '1.0.0'
     schemas: Optional[List] = []
     records: Optional[Dict] = []
@@ -475,6 +464,7 @@ class App(StandardBase):
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
 
 class IntegratedApp(StandardBase):
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('inap'))
     authentication_url: Optional[str] = None
     token_url: Optional[str] = None
     authentication_protocol: Optional[str] = None
@@ -491,8 +481,9 @@ class IntegratedApp(StandardBase):
     organization: Optional[str] = None
 
 class AuthCredential(StandardBase):
-    user: UserLookup
-    integrated_app: Lookup
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('aucr'))
+    user: PrefixedID
+    integrated_app: PrefixedID
     data: dict = {}
     headers: Optional[dict] = {}
     api_key: Optional[str] = None
@@ -558,24 +549,24 @@ class SendNotificationSetting(BetterBaseModel):
     data: dict = {}
 
 class NotificationSubscriber(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('nosu'))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
-    created_by: SystemLookup | UserLookup | Lookup
-    modified_by: SystemLookup | UserLookup | Lookup
+    created_by: PrefixedID
+    modified_by: PrefixedID
     name: str
-    user: UserLookup
+    user: PrefixedID
     active: bool = True
-    notification_setting: Lookup
+    notification_setting: PrefixedID
     record_id: Optional[str] = None
-    object: Optional[Lookup] = None
+    object: Optional[PrefixedID] = None
 
 class NotificationSetting(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('nose'))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
-    created_by: SystemLookup | UserLookup | Lookup
-    modified_by: SystemLookup | UserLookup | Lookup
+    created_by: PrefixedID
+    modified_by: PrefixedID
     name: str
     channel: str
     type: str
@@ -586,7 +577,7 @@ class NotificationSetting(BetterBaseModel):
     save: bool = False
     notify: bool = True
     record_alerts: bool = False
-    object: Optional[dict] = None
+    object: Optional[PrefixedID] = None
     push_to_mobile: bool = False
     all_users: bool = False
     add_record_owner: bool = False
@@ -598,28 +589,28 @@ class NotificationSetting(BetterBaseModel):
     child_collection_key: Optional[str] = None
     icon: Optional[str] = None
     notify_sender: bool = False
-    sender: Optional[Lookup] = None
-    subscriber_creation_function: Optional[Lookup] = None
-    subscriber_creation_automation: Optional[Lookup] = None
+    sender: Optional[PrefixedID] = None
+    subscriber_creation_function: Optional[PrefixedID] = None
+    subscriber_creation_automation: Optional[PrefixedID] = None
     push_to_web: bool = False
 
 class Notification(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('noti'))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
-    created_by: SystemLookup | UserLookup | Lookup = SystemLookup()
-    modified_by: SystemLookup | UserLookup | Lookup = SystemLookup()
+    created_by: Optional[PrefixedID] = None
+    modified_by: Optional[PrefixedID] = None
     name: str
     channel: str
     type: str
     data: dict
     read: bool = False
-    user: UserLookup
-    object: Optional[Lookup] = None
+    user: PrefixedID
+    object: Optional[PrefixedID] = None
     record_id: Optional[str] = None
     body: Optional[str] = None
     title: Optional[str] = None
-    notification_setting: Optional[Lookup] = None
+    notification_setting: Optional[PrefixedID] = None
     notify: bool = True
     save: bool = True
 
@@ -731,12 +722,31 @@ class GmailSendRequest(BetterBaseModel):
     def convert_to_list(cls, v):
         pass
 
+class OutlookMessageSendRequest(BetterBaseModel):
+    to: List[str] | str
+    from_email: str
+    cc: Optional[List[str]] = None
+    bcc: Optional[List[str]] = None
+    reply_to: Optional[str] = None
+    subject: Optional[str] = None
+    body: Optional[str] = None
+    html_content: Optional[str] = None
+    template_id: Optional[str] | Optional[dict] = None
+    merge_data: Optional[Dict[str, Any]] = None
+    attachments: Optional[List[str]] = None
+    thread_id: Optional[str] = None
+
+    @field_validator('to', mode='before')
+    @classmethod
+    def convert_to_list(cls, v):
+        pass
+
 class Log(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('log'))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
-    created_by: UserLookup
-    modified_by: UserLookup
+    created_by: PrefixedID
+    modified_by: PrefixedID
     name: str
     header: dict = {}
     log: Optional[str] = None
@@ -769,13 +779,13 @@ class BulkSend(BetterBaseModel):
     automation: Optional[str] = None
 
 class ScheduleTriggerSetting(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('sts'))
     name: str
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
-    created_by: UserLookup
-    modified_by: UserLookup
-    running_user: Optional[UserLookup] | Optional[dict] = None
+    created_by: PrefixedID
+    modified_by: PrefixedID
+    running_user: Optional[PrefixedID] | Optional[dict] = None
     cron_schedule: str
     active: bool = True
     data: Optional[dict] = None
@@ -837,8 +847,8 @@ class SendGridMailSettings(BaseModel):
     bypass_unsubscribe_management: SendGridEnable = SendGridEnable()
 
 class SendGridTrackingSettings(BaseModel):
-    click_tracking: bool = True
-    open_tracking: bool = True
+    click_tracking: bool = False
+    open_tracking: bool = False
     subscription_tracking: bool = False
     ganalytics: Optional[Dict[str, Any]] = None
 
@@ -849,25 +859,33 @@ class SendGridAttachment(BaseModel):
     disposition: Optional[str] = 'attachment'
 
 class SendGridEmailRequest(BaseModel):
-    to_emails: List[str]
-    from_email: str
+    to_emails: Optional[List[str]] = None
+    from_email: Optional[str] = None
     cc: Optional[List[str]] = None
     bcc: Optional[List[str]] = None
     reply_to: Optional[str] = None
-    subject: str
-    plain_text_content: str
+    subject: Optional[str] = None
+    plain_text_content: Optional[str] = None
     html_content: Optional[str] = None
+    to: Optional[List[str] | str] = None
+    to_recipients: Optional[List[str] | str] = None
+    cc_recipients: Optional[List[str] | str] = None
+    bcc_recipients: Optional[List[str] | str] = None
+    body: Optional[str] = None
+    body_content: Optional[str] = None
     template_id: Optional[str] | Optional[dict] = None
     merge_data: Optional[Dict[str, Any]] = None
+    thread_id: Optional[str] = None
+    parent_message_id: Optional[str] = None
     file_attachments: Optional[List[str]] = None
     attachments: Optional[List[SendGridAttachment]] = None
     mail_settings: Optional[SendGridMailSettings] = None
     tracking_settings: Optional[SendGridTrackingSettings] = None
     asm_settings: Optional[SendGridAsmSettings] = None
-    campaign: Optional[Lookup] = None
-    campaign_contact: Optional[Lookup] = None
+    campaign: Optional[PrefixedID] = None
+    campaign_contact: Optional[PrefixedID] = None
 
-    @field_validator('to_emails', 'cc', 'bcc', mode='before')
+    @field_validator('to_emails', 'cc', 'bcc', 'to', 'to_recipients', 'cc_recipients', 'bcc_recipients', mode='before')
     @classmethod
     def convert_str_to_list(cls, v):
         pass
@@ -878,8 +896,8 @@ class SendGridEmailRequest(BaseModel):
         pass
 
 class TwilioSMS(BaseModel):
-    from_number: Optional[str] | Optional[dict] = None
-    to: Optional[str] = None
+    from_number: Optional[str | dict | Phone] = None
+    to: Optional[str | dict | Phone] = None
     body: Optional[str] = ''
     template_id: Optional[str] | Optional[dict] = None
     merge_data: Optional[Dict[str, Any]] | Optional[str] = None
@@ -897,14 +915,14 @@ class TwilioSMS(BaseModel):
     campaign_id: Optional[str] = None
 
 class Function(BetterBaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('fun'))
     name: str
     created_date: datetime = Field(default_factory=datetime.utcnow)
     modified_date: datetime = Field(default_factory=datetime.utcnow)
-    created_by: dict | UserLookup | str = ''
-    modified_by: dict | UserLookup | str = ''
+    created_by: dict | PrefixedID | str = ''
+    modified_by: dict | PrefixedID | str = ''
     file_name: str
-    app: dict | Lookup | str = ''
+    app: dict | PrefixedID | str = ''
     code: str = ''
 
 class PersonalAccessTokenCreate(BaseModel):
@@ -912,7 +930,7 @@ class PersonalAccessTokenCreate(BaseModel):
     expires_in_days: Optional[int] = None
 
 class PersonalAccessTokenResponse(BaseModel):
-    id: str
+    id: PrefixedID
     name: str
     token: Optional[str] = None
     created_at: str
