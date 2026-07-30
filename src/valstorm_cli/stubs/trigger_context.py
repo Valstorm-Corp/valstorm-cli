@@ -101,6 +101,11 @@ class RecordTriggerContext:
     def is_changed(self, record_id: str, field: str) -> bool:
         pass
 
+    async def get_schema_from_id_async(self, record_id: str, db) -> Optional[str]:
+        '''Extracts the schema api name from a flat prefixed string ID, supporting custom dynamic prefixes.
+E.g., "cst1_pCV6UUEoHNHgbfIE" -> "custom_object_1"'''
+        pass
+
     def get_schema_from_id(self, record_id: str) -> Optional[str]:
         pass
 

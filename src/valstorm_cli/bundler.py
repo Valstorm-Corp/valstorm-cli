@@ -66,7 +66,19 @@ def bundle_local_app(app_config_path: Path, workspace_root: Path) -> Dict[str, A
                     
                     # Also check if listed in explicit records of config (if provided)
                     explicit_records = app_config.get("records", {}).get(file_type, [])
-                    is_explicit = meta_data.get("file_name") in explicit_records or meta_file.name in explicit_records
+                    is_explicit = False
+                    for er in explicit_records:
+                        if isinstance(er, str):
+                            if meta_data.get("file_name") == er or meta_file.name == er:
+                                is_explicit = True
+                                break
+                        elif isinstance(er, dict):
+                            if meta_data.get("id") and meta_data.get("id") == er.get("id"):
+                                is_explicit = True
+                                break
+                            elif meta_data.get("file_name") and meta_data.get("file_name") == er.get("file_name"):
+                                is_explicit = True
+                                break
                     
                     if is_app_member or is_explicit:
                         # If there is a matching code file, read the code on-disk to make sure we push current code
@@ -82,36 +94,52 @@ def bundle_local_app(app_config_path: Path, workspace_root: Path) -> Dict[str, A
                     pass
                     
             # If explicit listings were specified but didn't have metadata JSON files,
-            # we can create skeleton records for them
+            # we can create skeleton records for them, or append the dict directly
             explicit_records = app_config.get("records", {}).get(file_type, [])
-            for explicit_file in explicit_records:
-                # Check if already added
-                if any(r.get("file_name") == explicit_file for r in type_records):
-                    continue
-                    
-                file_path = type_dir / explicit_file
-                if file_path.exists():
-                    try:
-                        with open(file_path, "r") as f_code:
-                            code_content = f_code.read()
+            for er in explicit_records:
+                if isinstance(er, str):
+                    # Check if already added
+                    if any(r.get("file_name") == er for r in type_records):
+                        continue
                         
-                        # Generate basic skeleton
-                        skeleton = {
-                            "name": file_path.stem.replace("_", " ").title(),
-                            "file_name": explicit_file,
-                            "code": code_content,
-                            "app": app_id,
-                            "active": True
-                        }
-                        
-                        # Set default trigger fields if applicable
-                        if file_type == "record_trigger":
-                            skeleton["object_api_name"] = "contact" # default fallback
-                            skeleton["trigger_type"] = "after_upsert"
+                    file_path = type_dir / er
+                    if file_path.exists():
+                        try:
+                            with open(file_path, "r") as f_code:
+                                code_content = f_code.read()
                             
-                        type_records.append(skeleton)
-                    except Exception:
-                        pass
+                            # Generate basic skeleton
+                            skeleton = {
+                                "name": file_path.stem.replace("_", " ").title(),
+                                "file_name": er,
+                                "code": code_content,
+                                "app": app_id,
+                                "active": True
+                            }
+                            
+                            # Set default trigger fields if applicable
+                            if file_type == "record_trigger":
+                                skeleton["object_api_name"] = "contact" # default fallback
+                                skeleton["trigger_type"] = "after_upsert"
+                                
+                            type_records.append(skeleton)
+                        except Exception:
+                            pass
+                elif isinstance(er, dict):
+                    if any(r.get("id") == er.get("id") for r in type_records):
+                        continue
+                    
+                    # Try to load the latest local code if a file_name is defined
+                    file_name = er.get("file_name")
+                    if file_name:
+                        file_path = type_dir / file_name
+                        if file_path.exists():
+                            try:
+                                with open(file_path, "r") as f_code:
+                                    er["code"] = f_code.read()
+                            except Exception:
+                                pass
+                    type_records.append(er)
                         
             if type_records:
                 bundle["records"][file_type] = type_records
