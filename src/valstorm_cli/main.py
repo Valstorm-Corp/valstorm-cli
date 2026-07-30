@@ -83,35 +83,56 @@ def status():
 @app.command()
 def update():
     """
-    Update the Valstorm CLI to the latest version from GitHub.
+    Update the Valstorm CLI to the latest version.
     """
-    console.print("Updating Valstorm CLI to the latest version from GitHub...")
-    repo_url = "git+https://github.com/Valstorm-Corp/valstorm-cli.git"
+    from importlib.metadata import version, PackageNotFoundError
+    try:
+        current_version = version("valstorm-cli")
+    except PackageNotFoundError:
+        current_version = "unknown"
+
+    console.print(f"Current version: [cyan]{current_version}[/cyan]")
+    repo_url = "git+https://github.com/Valstorm-Corp/monorepo.git#subdirectory=cli"
     
     try:
-        # Check if installed as a uv tool first
-        if shutil.which("uv"):
-            res = subprocess.run(["uv", "tool", "list"], capture_output=True, text=True)
-            if "valstorm-cli" in res.stdout:
-                console.print("Detected installation as a [cyan]uv tool[/cyan]. Upgrading...")
-                subprocess.run(["uv", "tool", "upgrade", "valstorm-cli"], check=True)
-                console.print("[bold green]✓[/bold green] Valstorm CLI updated successfully.")
-                return
+        with console.status("[bold cyan]Updating Valstorm CLI...[/bold cyan]") as status:
+            # Check if we are running inside the monorepo source tree itself
+            try:
+                root = get_project_root()
+                if (root / "cli" / "pyproject.toml").exists():
+                    status.update("[bold cyan]Detected local monorepo. Running uv sync...[/bold cyan]")
+                    if shutil.which("uv"):
+                        subprocess.run(["uv", "sync", "--project", str(root / "cli")], check=True, capture_output=True)
+                        console.print("[bold green]✓[/bold green] Local workspace synced successfully.")
+                        return
+            except Exception:
+                pass
 
-        # Fallback to pip upgrade
-        # We try uv pip install if uv is available, otherwise standard pip
-        if shutil.which("uv"):
-            console.print("Using [cyan]uv[/cyan] to upgrade...")
-            cmd = ["uv", "pip", "install", "--upgrade", repo_url]
-        else:
-            console.print("Using [cyan]pip[/cyan] to upgrade...")
-            cmd = [sys.executable, "-m", "pip", "install", "--upgrade", repo_url]
-             
-        subprocess.run(cmd, check=True)
+            # Check if installed as a uv tool first
+            if shutil.which("uv"):
+                res = subprocess.run(["uv", "tool", "list"], capture_output=True, text=True)
+                if "valstorm-cli" in res.stdout:
+                    status.update("[bold cyan]Detected installation as a uv tool. Upgrading...[/bold cyan]")
+                    subprocess.run(["uv", "tool", "upgrade", "valstorm-cli"], check=True, capture_output=True)
+                    console.print("[bold green]✓[/bold green] Valstorm CLI uv tool updated successfully.")
+                    return
+
+            # Fallback to pip upgrade
+            if shutil.which("uv"):
+                status.update("[bold cyan]Using uv pip to upgrade from GitHub...[/bold cyan]")
+                cmd = ["uv", "pip", "install", "--upgrade", repo_url]
+            else:
+                status.update("[bold cyan]Using pip to upgrade from GitHub...[/bold cyan]")
+                cmd = [sys.executable, "-m", "pip", "install", "--upgrade", repo_url]
+                 
+            subprocess.run(cmd, check=True, capture_output=True)
+            
         console.print("[bold green]✓[/bold green] Valstorm CLI updated successfully.")
         
     except subprocess.CalledProcessError as e:
-        console.print(f"[bold red]Error during update:[/bold red] {e}")
+        console.print(f"[bold red]Error during update:[/bold red] Command failed with exit code {e.returncode}")
+        if e.stderr:
+            console.print(f"[dim]{e.stderr.decode('utf-8', errors='ignore')}[/dim]")
         raise typer.Exit(1)
     except Exception as e:
         console.print(f"[bold red]An unexpected error occurred:[/bold red] {e}")
