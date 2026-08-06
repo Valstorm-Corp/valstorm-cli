@@ -461,8 +461,28 @@ def mcp_start():
         console.print("[bold red]Error:[/bold red] valstorm-mcp package not found. Is it installed?")
         raise typer.Exit(1)
 
+def version_callback(value: bool):
+    if value:
+        try:
+            from importlib.metadata import version
+            __version__ = version("valstorm-cli")
+        except Exception:
+            data = open(Path(__file__).parent.parent.parent / "pyproject.toml", "r").read()
+            version_line = next((line for line in data.splitlines() if line.strip().startswith("version =")), None)
+            __version__ = version_line.split("=")[1].strip().strip('"') if version_line else "Unknown"
+        console.print(f"Valstorm CLI version: [bold cyan]{__version__}[/bold cyan]")
+        raise typer.Exit()
+
 @app.callback()
-def main():
+def main(
+    version: Optional[bool] = typer.Option(
+        None,
+        "--version",
+        callback=version_callback,
+        is_eager=True,
+        help="Show the version and exit."
+    )
+):
     """
     Valstorm Developer CLI.
     """

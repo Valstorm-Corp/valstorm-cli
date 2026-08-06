@@ -11,12 +11,12 @@ class TriggerTransaction: pass
 class PlatformContext: pass
 class Request: pass
 
-from .platform_context import BaseContext, RecordContext, QueryContext, SchemaContext, TaskContext, FileContext, TwilioContext, NotificationContext, CommunicationContext, WorkflowContext, MetadataContext, SalesforceContext, GoogleContext, AgentContext, IntegrationContext, UtilsContext, FormulaContext, RollupContext, ExceptionContext, PlatformContext
 import time
 import contextvars
 from typing import Dict, List, Set, Optional, Any
 from uuid import uuid4
-from .models import User
+from valstorm_platform.models import User
+from valstorm.dependencies import add_log
 _active_transaction = contextvars.ContextVar('active_transaction', default=None)
 
 class TriggerTransaction:
@@ -31,15 +31,19 @@ class TriggerTransaction:
         pass
 
     def push(self, description: str) -> bool:
+        """Increases Chain Depth. Returns False if max nesting reached."""
         pass
 
     def pop(self):
+        """Decrements Chain Depth."""
         pass
 
     def has_ran(self, schema: str, trigger_name: str, context: str) -> bool:
+        """Checks if this specific trigger has already executed for this context."""
         pass
 
     def log_execution(self, schema: str, trigger_name: str, context: str):
+        """Registers that a trigger is about to run."""
         pass
 
     def is_bypassed(self, trigger_identifier: str) -> bool:
@@ -65,28 +69,7 @@ class RecordTriggerContext:
     """
 
     def __init__(self, schema_api_name: str, context: str, transaction: TriggerTransaction, new_data: List[Dict]=None, old_data: List[Dict]=None):
-        self.transaction = None
-        self.schema = None
-        self.trigger_context = None
-        self.transaction_id = None
-        self.user = None
-        self.platform: PlatformContext = None
-        self.records: RecordContext = None
-        self.query: QueryContext = None
-        self.schemas: SchemaContext = None
-        self.communications: CommunicationContext = None
-        self.workflows: WorkflowContext = None
-        self.metadata: MetadataContext = None
-        self.integrations: IntegrationContext = None
-        self.utils: UtilsContext = None
-        self.rollups: RollupContext = None
-        self.files = None
-        self.exceptions: ExceptionContext = None
-        self.log = None
-        self.new_map: Dict[str, Dict] = None
-        self.old_map: Dict[str, Dict] = None
-        self._changes: Dict[str, Set[str]] = None
-        self._diff_calculated = None
+        pass
 
     @property
     def changes(self) -> Dict[str, Set[str]]:
@@ -96,14 +79,20 @@ class RecordTriggerContext:
         pass
 
     def _are_equal(self, val1: Any, val2: Any) -> bool:
+        """
+        Deep comparison that treats None and missing keys as equivalent.
+        Also handles Pydantic models vs dicts.
+        """
         pass
 
     def is_changed(self, record_id: str, field: str) -> bool:
         pass
 
     async def get_schema_from_id_async(self, record_id: str, db) -> Optional[str]:
-        '''Extracts the schema api name from a flat prefixed string ID, supporting custom dynamic prefixes.
-E.g., "cst1_pCV6UUEoHNHgbfIE" -> "custom_object_1"'''
+        """
+        Extracts the schema api name from a flat prefixed string ID, supporting custom dynamic prefixes.
+        E.g., "cst1_pCV6UUEoHNHgbfIE" -> "custom_object_1"
+        """
         pass
 
     def get_schema_from_id(self, record_id: str) -> Optional[str]:

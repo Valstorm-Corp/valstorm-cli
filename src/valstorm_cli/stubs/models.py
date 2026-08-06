@@ -36,9 +36,11 @@ def SystemPrefixedID() -> str:
 system_fields = ['id', 'name', 'created_date', 'modified_date', 'created_by', 'modified_by', 'schema', 'owner', 'shared_with']
 
 def ensure_utc(dt: datetime) -> datetime:
+    """If a datetime is naive, set its timezone to UTC."""
     pass
 
 def datetime_to_z_format(dt: datetime) -> str:
+    """Formats a datetime object to an ISO string ending in 'Z'."""
     pass
 AwareDatetime = Annotated[datetime, AfterValidator(ensure_utc)]
 
@@ -223,6 +225,7 @@ class SharingAccess(str, Enum):
 
 class Sharing(BetterBaseModel):
     user: Optional[PrefixedID] = Field(default=None, json_schema_extra={'format': 'lookup', 'schema': 'user', 'title': 'User'})
+    group: Optional[str] = Field(default=None, json_schema_extra={'format': 'lookup', 'schema': 'group', 'title': 'Group'})
     access: SharingAccess = Field(default=SharingAccess.READ, title='Access Level')
 
 class ReadNotificationData(BetterBaseModel):
@@ -338,8 +341,8 @@ class StandardBase(BetterBaseModel):
     name: str
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
-    created_by: PrefixedID = Field(json_schema_extra={'format': 'lookup', 'schema': 'user'})
-    modified_by: PrefixedID = Field(json_schema_extra={'format': 'lookup', 'schema': 'user'})
+    created_by: Optional[PrefixedID] = Field(default=None, json_schema_extra={'format': 'lookup', 'schema': 'user'})
+    modified_by: Optional[PrefixedID] = Field(default=None, json_schema_extra={'format': 'lookup', 'schema': 'user'})
     vaults: Optional[List[str]] = Field(default_factory=list)
     vault_paths: Optional[List[str]] = Field(default_factory=list)
 
