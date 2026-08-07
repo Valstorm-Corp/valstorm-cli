@@ -756,7 +756,7 @@ wheels = [
 
 [[package]]
 name = "valstorm-cli"
-version = "0.9.7"
+version = "0.9.9"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
