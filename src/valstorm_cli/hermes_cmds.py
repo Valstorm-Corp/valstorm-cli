@@ -127,7 +127,21 @@ def _config_set(profile, key, value):
 
 
 def sync_model_config(source, target):
-    """Copy model.default/model.provider from source (default profile if None) into target."""
+    """Backfill model.default/model.provider from source (default profile if None) into target.
+
+    Additive-only: if `target` already has its own model configured — e.g. a
+    newly-linked network profile whose config.example.yaml was just copied to
+    config.yaml with an intentional model tier (see model.md) — that tier is
+    left untouched. Only profiles with NO model configured at all (blank
+    config, no example, or the source's model.default is empty) fall back to
+    copying the source's model. Without this guard, every profile in an
+    agentic network silently collapses onto whatever model the default
+    profile happens to use, defeating tiered model allocation entirely.
+    """
+    existing_model = _config_get(target, "model.default")
+    existing_provider = _config_get(target, "model.provider")
+    if existing_model and existing_provider:
+        return
     default_model = _config_get(source, "model.default")
     provider = _config_get(source, "model.provider")
     if not default_model or not provider:
@@ -249,15 +263,17 @@ def link_profiles():
 
                 if target.exists() or target.is_symlink():
                     console.print(f"  [yellow]Skipping {item.name}:[/yellow] Already exists in profiles.")
-                else:
-                    os.symlink(item, target)
-                    console.print(f"  [green]Linked {item.name}[/green]")
-                    try:
-                        _sync_default_credentials_into(item.name)
-                    except Exception as e:
-                        console.print(f"  [yellow]Warning:[/yellow] Failed to sync credentials for {item.name}: {e}")
+                    continue
 
-                # Generate default config.yaml if an example exists
+                os.symlink(item, target)
+                console.print(f"  [green]Linked {item.name}[/green]")
+
+                # Generate config.yaml from config.example.yaml FIRST — this
+                # establishes the profile's own intended model tier (see
+                # model.md) before credential sync runs. sync_model_config()
+                # is additive-only (won't override an existing model), but
+                # that guard only works if config.yaml — and therefore the
+                # tiered model — already exists by the time it checks.
                 config_example = item / "config.example.yaml"
                 config = item / "config.yaml"
                 if config_example.exists() and not config.exists():
@@ -266,6 +282,11 @@ def link_profiles():
                         console.print(f"  [dim]Generated default config.yaml for {item.name}[/dim]")
                     except OSError as e:
                         console.print(f"  [yellow]Warning:[/yellow] Failed to generate config.yaml for {item.name}: {e}")
+
+                try:
+                    _sync_default_credentials_into(item.name)
+                except Exception as e:
+                    console.print(f"  [yellow]Warning:[/yellow] Failed to sync credentials for {item.name}: {e}")
 
 
 @hermes_app.command("install")
