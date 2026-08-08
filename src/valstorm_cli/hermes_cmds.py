@@ -91,8 +91,8 @@ def _migrate_legacy_single_source():
 
     console.print(f"[green]Migrated legacy network into {default_dir}[/green]")
     console.print(
-        "[yellow]Your existing symlinks in ~/.hermes/profiles/* pointed at the old paths and are now stale. "
-        "Run 'valstorm hermes sync' to relink profiles at their new locations.[/yellow]"
+        "[yellow]Your existing profiles in ~/.hermes/profiles/* pointed at the old paths and are now stale. "
+        "Run 'valstorm hermes sync' to update profiles at their new locations.[/yellow]"
     )
 
 
@@ -261,12 +261,18 @@ def link_profiles():
             if item.is_dir() and item.name != ".git":
                 target = PROFILES_DIR / item.name
 
-                if target.exists() or target.is_symlink():
-                    console.print(f"  [yellow]Skipping {item.name}:[/yellow] Already exists in profiles.")
-                    continue
-
-                os.symlink(item, target)
-                console.print(f"  [green]Linked {item.name}[/green]")
+                if target.is_symlink():
+                    target.unlink()
+                    shutil.copytree(item, target)
+                    console.print(f"  [green]Migrated {item.name} from symlink to copy[/green]")
+                elif not target.exists():
+                    shutil.copytree(item, target)
+                    console.print(f"  [green]Copied {item.name}[/green]")
+                else:
+                    # Overwrite-copy updates existing files without touching local runtime files.
+                    # Note: files removed from source repo are not deleted in target profile.
+                    shutil.copytree(item, target, dirs_exist_ok=True)
+                    console.print(f"  [dim]Updated {item.name}[/dim]")
 
                 # Generate config.yaml from config.example.yaml FIRST — this
                 # establishes the profile's own intended model tier (see
@@ -274,8 +280,8 @@ def link_profiles():
                 # is additive-only (won't override an existing model), but
                 # that guard only works if config.yaml — and therefore the
                 # tiered model — already exists by the time it checks.
-                config_example = item / "config.example.yaml"
-                config = item / "config.yaml"
+                config_example = target / "config.example.yaml"
+                config = target / "config.yaml"
                 if config_example.exists() and not config.exists():
                     try:
                         shutil.copy2(config_example, config)
@@ -328,7 +334,7 @@ def install(
     data.setdefault("sources", {})[source_name] = {"repo_url": repo_url}
     save_sources(data)
 
-    console.print("Linking profiles...")
+    console.print("Copying profiles...")
     link_profiles()
     console.print("\n[bold green]Network installed successfully![/bold green]")
     console.print("Run `hermes --profile <profile_name>` to begin.")
@@ -364,7 +370,7 @@ def sync():
 
         console.print(f"  [dim]{res.stdout.strip()}[/dim]")
 
-    console.print("Updating profile links...")
+    console.print("Updating profiles...")
     link_profiles()
 
     if any_failed:
