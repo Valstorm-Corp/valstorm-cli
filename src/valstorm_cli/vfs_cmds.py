@@ -167,7 +167,7 @@ def vfs_move(
 def vfs_rebuild_cache(
     json_output: bool = typer.Option(False, "--json", help="Output raw JSON response"),
 ):
-    """Rebuild the Virtual File System (VFS) cache from MongoDB source of truth."""
+    """Rebuild the Virtual File System (VFS) cache from the source of truth."""
     auth = get_auth()
     base_url = get_api_base_url()
 
@@ -202,19 +202,136 @@ def vfs_rebuild_cache(
     console.print(f"[green]{msg}[/green]")
 
 @vfs_app.command("upload")
-def vfs_upload():
-    """(Stub) Upload a file to VFS/S3"""
-    console.print("Upload not implemented yet.")
-    sys.exit(1)
+def vfs_upload(
+    file_path: str = typer.Argument(..., help="Local path to the file to upload"),
+    vault_id: str = typer.Argument(..., help="Destination Vault ID"),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON instead of a message"),
+):
+    """Upload a file to VFS/S3"""
+    import os
+    auth = get_auth()
+    base_url = get_api_base_url()
+    
+    if not os.path.exists(file_path):
+        console.print(f"[bold red]Error:[/bold red] File not found: {file_path}")
+        sys.exit(1)
+        
+    filename = os.path.basename(file_path)
+    
+    with httpx.Client(timeout=300.0) as client:
+        try:
+            with open(file_path, "rb") as f:
+                files = {"file": (filename, f, "application/octet-stream")}
+                data = {"vault_id": vault_id}
+                
+                res = client.post(
+                    f"{base_url}/vfs/upload",
+                    data=data,
+                    files=files,
+                    headers={"Authorization": f"Bearer {auth.access_token}"}
+                )
+                handle_error(res, json_output)
+                response_data = res.json()
+        except httpx.RequestError as e:
+            if json_output:
+                print(json.dumps({"error": str(e)}))
+            else:
+                console.print(f"[bold red]Network Error:[/bold red] {e}")
+            sys.exit(2)
+
+    if json_output:
+        print(json.dumps(response_data, indent=2))
+        return
+
+    console.print(f"[green]Successfully uploaded [bold]{filename}[/bold] to vault [bold]{vault_id}[/bold][/green]")
+    if response_data.get("id"):
+        console.print(f"File ID: [cyan]{response_data.get('id')}[/cyan]")
+
 
 @vfs_app.command("download")
-def vfs_download():
-    """(Stub) Download a file from VFS/S3"""
-    console.print("Download not implemented yet.")
-    sys.exit(1)
+def vfs_download(
+    file_id: str = typer.Argument(..., help="File ID to download"),
+    destination_path: str | None = typer.Argument(None, help="Destination directory or file path"),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON on error"),
+):
+    """Download a file from VFS/S3"""
+    import os
+    import re
+    auth = get_auth()
+    base_url = get_api_base_url()
+    
+    with httpx.Client(timeout=300.0) as client:
+        try:
+            with client.stream(
+                "GET",
+                f"{base_url}/vfs/download/{file_id}",
+                headers={"Authorization": f"Bearer {auth.access_token}"}
+            ) as res:
+                handle_error(res, json_output)
+                
+                # Try to get filename from Content-Disposition
+                filename = f"downloaded_{file_id}"
+                cd = res.headers.get("content-disposition")
+                if cd:
+                    match = re.search(r'filename="?([^"]+)"?', cd)
+                    if match:
+                        filename = match.group(1)
+                
+                # Determine final output path
+                out_path = filename
+                if destination_path:
+                    if os.path.isdir(destination_path):
+                        out_path = os.path.join(destination_path, filename)
+                    else:
+                        out_path = destination_path
+                
+                # Stream to disk
+                with open(out_path, "wb") as f:
+                    for chunk in res.iter_bytes(chunk_size=8192):
+                        f.write(chunk)
+                        
+                if not json_output:
+                    console.print(f"[green]Successfully downloaded to [bold]{out_path}[/bold][/green]")
+                    
+        except httpx.RequestError as e:
+            if json_output:
+                print(json.dumps({"error": str(e)}))
+            else:
+                console.print(f"[bold red]Network Error:[/bold red] {e}")
+            sys.exit(2)
+
 
 @vfs_app.command("delete")
-def vfs_delete():
-    """(Stub) Delete a file from VFS/S3"""
-    console.print("Delete not implemented yet.")
-    sys.exit(1)
+def vfs_delete(
+    item_id: str = typer.Argument(..., help="Vault or File ID to delete"),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON instead of a message"),
+):
+    """Delete a file or vault from VFS/S3"""
+    auth = get_auth()
+    base_url = get_api_base_url()
+
+    with httpx.Client() as client:
+        try:
+            res = client.delete(
+                f"{base_url}/vfs/{item_id}",
+                headers={"Authorization": f"Bearer {auth.access_token}"}
+            )
+            handle_error(res, json_output)
+            
+            # 204 No Content doesn't have json
+            if res.status_code == 204:
+                data = {"message": "success"}
+            else:
+                data = res.json()
+        except httpx.RequestError as e:
+            if json_output:
+                print(json.dumps({"error": str(e)}))
+            else:
+                console.print(f"[bold red]Network Error:[/bold red] {e}")
+            sys.exit(2)
+
+    if json_output:
+        print(json.dumps(data, indent=2))
+        return
+
+    console.print(f"[green]Successfully deleted [bold]{item_id}[/bold][/green]")
