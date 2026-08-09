@@ -28,10 +28,12 @@ def handle_error(response: httpx.Response, json_output: bool):
 
 @vfs_app.command("list")
 def vfs_list(
-    vault_id: str,
+    vault_id: Optional[str] = typer.Argument(None, help="Vault ID or Vault Name"),
     json_output: bool = typer.Option(False, "--json", help="Output raw JSON instead of a formatted table"),
 ):
     """List files and directories in a given vault."""
+    if not vault_id:
+        vault_id = "root"
     auth = get_auth()
     base_url = get_api_base_url()
     
@@ -39,7 +41,7 @@ def vfs_list(
         try:
             res = client.get(
                 f"{base_url}/vfs/vault/{vault_id}",
-                headers={"Authorization": f"Bearer {auth['access_token']}"}
+                headers={"Authorization": f"Bearer {auth.access_token}"}
             )
             handle_error(res, json_output)
             data = res.json()
@@ -87,7 +89,7 @@ def vfs_query(
             res = client.post(
                 f"{base_url}/vfs/query",
                 json=payload,
-                headers={"Authorization": f"Bearer {auth['access_token']}"}
+                headers={"Authorization": f"Bearer {auth.access_token}"}
             )
             handle_error(res, json_output)
             data = res.json()
@@ -144,7 +146,7 @@ def vfs_move(
             res = client.post(
                 f"{base_url}/vfs/move",
                 json=payload,
-                headers={"Authorization": f"Bearer {auth['access_token']}"}
+                headers={"Authorization": f"Bearer {auth.access_token}"}
             )
             handle_error(res, json_output)
             data = res.json()
