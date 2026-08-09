@@ -14,10 +14,17 @@ console = Console()
 def handle_error(response: httpx.Response, json_output: bool):
     """Handles error reporting uniformly for VFS commands."""
     if response.status_code >= 400:
+        # Check if response has been read (or is streaming)
+        try:
+            error_text = response.text
+        except httpx.ResponseNotRead:
+            response.read()
+            error_text = response.text
+
         if json_output:
-            print(json.dumps({"error": response.text, "status_code": response.status_code}))
+            print(json.dumps({"error": error_text, "status_code": response.status_code}))
         else:
-            console.print(f"[bold red]API Error ({response.status_code}):[/bold red] {response.text}")
+            console.print(f"[bold red]API Error ({response.status_code}):[/bold red] {error_text}")
         
         if response.status_code in (401, 403):
             sys.exit(3)
