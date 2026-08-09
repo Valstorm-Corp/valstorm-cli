@@ -1,12 +1,12 @@
-import typer
-import httpx
 import json
 import sys
+
+import httpx
+import typer
 from rich.console import Console
 from rich.table import Table
-from typing import Optional
 
-from .auth import get_auth, get_api_base_url
+from .auth import get_api_base_url, get_auth
 
 vfs_app = typer.Typer(help="Manage the Virtual File System (VFS)", no_args_is_help=True)
 console = Console()
@@ -28,7 +28,7 @@ def handle_error(response: httpx.Response, json_output: bool):
 
 @vfs_app.command("list")
 def vfs_list(
-    vault_id: Optional[str] = typer.Argument(None, help="Vault ID or Vault Name"),
+    vault_id: str | None = typer.Argument(None, help="Vault ID or Vault Name"),
     json_output: bool = typer.Option(False, "--json", help="Output raw JSON instead of a formatted table"),
 ):
     """List files and directories in a given vault."""
@@ -109,7 +109,7 @@ def vfs_query(
         console.print("[yellow]No results found.[/yellow]")
         return
         
-    console.print(f"\n[bold]Query Results:[/bold]\n")
+    console.print("\n[bold]Query Results:[/bold]\n")
     
     table = Table(show_header=True, header_style="bold magenta")
     if data and isinstance(data, list) and len(data) > 0:
@@ -162,6 +162,44 @@ def vfs_move(
         return
 
     console.print(f"[green]Successfully moved item {item_id} to vault {to_vault_id}[/green]")
+
+@vfs_app.command("rebuild-cache")
+def vfs_rebuild_cache(
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON response"),
+):
+    """Rebuild the Virtual File System (VFS) cache from MongoDB source of truth."""
+    auth = get_auth()
+    base_url = get_api_base_url()
+
+    if json_output:
+        with httpx.Client() as client:
+            try:
+                res = client.post(
+                    f"{base_url}/vfs/cache/rebuild",
+                    headers={"Authorization": f"Bearer {auth.access_token}"}
+                )
+                handle_error(res, json_output)
+                data = res.json()
+            except httpx.RequestError as e:
+                print(json.dumps({"error": str(e)}))
+                sys.exit(2)
+        print(json.dumps(data, indent=2))
+        return
+
+    with console.status("[bold cyan]Rebuilding VFS cache...[/bold cyan]"), httpx.Client() as client:
+        try:
+            res = client.post(
+                f"{base_url}/vfs/cache/rebuild",
+                headers={"Authorization": f"Bearer {auth.access_token}"}
+            )
+            handle_error(res, json_output)
+            data = res.json()
+        except httpx.RequestError as e:
+            console.print(f"[bold red]Network Error:[/bold red] {e}")
+            sys.exit(2)
+
+    msg = data.get("message", "VFS cache rebuilt successfully.") if isinstance(data, dict) else "VFS cache rebuilt successfully."
+    console.print(f"[green]{msg}[/green]")
 
 @vfs_app.command("upload")
 def vfs_upload():
