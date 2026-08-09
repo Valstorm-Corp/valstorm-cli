@@ -100,26 +100,27 @@ def update():
     
     try:
         with console.status("[bold cyan]Updating Valstorm CLI...[/bold cyan]") as status:
+            is_installed = "site-packages" in __file__
+
             # Check if we are running inside the monorepo source tree itself
-            try:
-                root = get_project_root()
-                if (root / "cli" / "pyproject.toml").exists():
-                    status.update("[bold cyan]Detected local monorepo. Running uv sync...[/bold cyan]")
-                    if shutil.which("uv"):
-                        subprocess.run(["uv", "sync", "--project", str(root / "cli")], check=True, capture_output=True)
-                        console.print("[bold green]✓[/bold green] Local workspace synced successfully.")
-                        return
-            except Exception:
-                pass
+            if not is_installed:
+                try:
+                    root = get_project_root()
+                    if (root / "cli" / "pyproject.toml").exists():
+                        status.update("[bold cyan]Detected local monorepo. Running uv sync...[/bold cyan]")
+                        if shutil.which("uv"):
+                            subprocess.run(["uv", "sync", "--project", str(root / "cli")], check=True, capture_output=True)
+                            console.print("[bold green]✓[/bold green] Local workspace synced successfully.")
+                            return
+                except Exception:
+                    pass
 
             # Check if installed as a uv tool first
-            if shutil.which("uv"):
-                res = subprocess.run(["uv", "tool", "list"], capture_output=True, text=True)
-                if "valstorm-cli" in res.stdout:
-                    status.update("[bold cyan]Detected installation as a uv tool. Upgrading...[/bold cyan]")
-                    subprocess.run(["uv", "tool", "upgrade", "valstorm-cli"], check=True, capture_output=True)
-                    console.print("[bold green]✓[/bold green] Valstorm CLI uv tool updated successfully.")
-                    return
+            if shutil.which("uv") and "uv/tools" in sys.executable:
+                status.update("[bold cyan]Detected installation as a uv tool. Upgrading...[/bold cyan]")
+                subprocess.run(["uv", "tool", "upgrade", "valstorm-cli"], check=True, capture_output=True)
+                console.print("[bold green]✓[/bold green] Valstorm CLI uv tool updated successfully.")
+                return
 
             # Fallback to pip upgrade
             if shutil.which("uv"):
