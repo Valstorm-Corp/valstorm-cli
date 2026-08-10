@@ -3,7 +3,8 @@ import json
 from typing import Optional
 from pathlib import Path
 from rich.console import Console
-from .auth import get_auth, get_api_base_url, get_project_root
+import httpx
+from .auth import get_auth, get_api_base_url, get_project_root, requires_auth, ValstormAuth
 from .scaffold import prepare_web_push
 from .project import update_local_stubs
 
@@ -16,13 +17,16 @@ push_app = typer.Typer(help="Upload local changes to the Valstorm cloud.")
 
 
 @pull_app.command(name="metadata")
+@requires_auth
 def pull(
     object_type: str = typer.Argument(None, help="Specific object type to pull (e.g., record_trigger)."),
     file_name: str = typer.Argument(None, help="Specific file to pull (e.g., trigger_name.py)."),
     manifest: str = typer.Option(None, "--manifest", "-m", help="Path to a deployment manifest JSON file."),
     force: bool = typer.Option(False, "--force", "--yes", "-y", help="Overwrite local changes without asking."),
     profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
-    env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment."),
+    client: httpx.Client = None,  # type: ignore
+    auth: ValstormAuth = None,  # type: ignore
 ):
     """
     Download records for metadata objects from the Valstorm cloud.
@@ -32,19 +36,12 @@ def pull(
     # Auto-update stubs silently on pull
     update_local_stubs(root, silent=True)
     
-    auth = get_auth(profile=profile, env=env)
-    
-    if not auth.ensure_valid_token():
-        console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
-        raise typer.Exit(1)
-
     # 1. Fetch available schemas to see what we can pull
-    with auth.get_client() as client:
-        schema_res = client.get("/schema")
-        if schema_res.status_code != 200:
-            console.print("[bold red]Failed to fetch schemas.[/bold red]")
-            raise typer.Exit(1)
-        available_schemas = schema_res.json()
+    schema_res = client.get("/schema")
+    if schema_res.status_code != 200:
+        console.print("[bold red]Failed to fetch schemas.[/bold red]")
+        raise typer.Exit(1)
+    available_schemas = schema_res.json()
 
     # 2. Define the union of platform system types and custom object schemas
     SYSTEM_TYPES = {
@@ -114,75 +111,74 @@ def pull(
         elif file_name:
             query += f" WHERE file_name = '{file_name}'"
         
-        with auth.get_client() as client:
-            response = client.post("/query", json={"query": query})
+        response = client.post("/query", json={"query": query})
+        
+        if response.status_code != 200:
+            console.print(f"[bold red]Fetch failed for {file_type}:[/bold red] {response.status_code}")
+            continue
             
-            if response.status_code != 200:
-                console.print(f"[bold red]Fetch failed for {file_type}:[/bold red] {response.status_code}")
-                continue
-                
-            data = response.json()
-            records = data.get("data", data) if isinstance(data, dict) else data
+        data = response.json()
+        records = data.get("data", data) if isinstance(data, dict) else data
             
-            if not isinstance(records, list):
-                console.print(f"[yellow]No records found for {file_type}.[/yellow]")
-                continue
-                
-            if file_name:
-                records = [r for r in records if r.get("file_name") == file_name]
+        if not isinstance(records, list):
+            console.print(f"[yellow]No records found for {file_type}.[/yellow]")
+            continue
+            
+        if file_name:
+            records = [r for r in records if r.get("file_name") == file_name]
 
-            target_dir = root / "object" / file_type
-            target_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Clean up old monolithic metadata file if it exists
-            old_meta = target_dir / f"{file_type}_metadata.json"
-            if old_meta.exists():
-                try:
-                    old_meta.unlink()
-                except Exception:
-                    pass
+        target_dir = root / "object" / file_type
+        target_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Clean up old monolithic metadata file if it exists
+        old_meta = target_dir / f"{file_type}_metadata.json"
+        if old_meta.exists():
+            try:
+                old_meta.unlink()
+            except Exception:
+                pass
 
-            count = 0
-            code_count = 0
-            for record in records:
-                count += 1
-                
-                # Save individual metadata
-                safe_name = "".join(c for c in str(record.get("name", "unnamed")) if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
-                record_id = record.get("id", "noid")
-                
-                with open(target_dir / f"{safe_name}_{record_id}.json", "w") as f:
-                    json.dump(record, f, indent=4)
-                rec_file_name = record.get("file_name")
-                code = record.get("code")
-                
-                if rec_file_name and code:
-                    file_path = target_dir / rec_file_name
-                    
-                    # Check if local file exists and has different content
-                    if file_path.exists() and not force:
-                        with open(file_path, "r") as f:
-                            local_code = f.read()
-                        if local_code != code:
-                            choice = typer.prompt(
-                                f"Local changes detected in {rec_file_name}. Overwrite? [y/N/a] (a=all)",
-                                default="n"
-                            ).lower()
-                            
-                            if choice == 'a':
-                                force = True
-                            elif choice != 'y':
-                                console.print(f"Skipping {rec_file_name}")
-                                continue
-                    
-                    with open(file_path, "w") as f:
-                        f.write(code)
-                    code_count += 1
+        count = 0
+        code_count = 0
+        for record in records:
+            count += 1
             
-            if code_count > 0:
-                console.print(f"[green]✓[/green] Synchronized {count} {file_type} records ({code_count} files).")
-            else:
-                console.print(f"[green]✓[/green] Synchronized {count} {file_type} records.")
+            # Save individual metadata
+            safe_name = "".join(c for c in str(record.get("name", "unnamed")) if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
+            record_id = record.get("id", "noid")
+            
+            with open(target_dir / f"{safe_name}_{record_id}.json", "w") as f:
+                json.dump(record, f, indent=4)
+            rec_file_name = record.get("file_name")
+            code = record.get("code")
+            
+            if rec_file_name and code:
+                file_path = target_dir / rec_file_name
+                
+                # Check if local file exists and has different content
+                if file_path.exists() and not force:
+                    with open(file_path, "r") as f:
+                        local_code = f.read()
+                    if local_code != code:
+                        choice = typer.prompt(
+                            f"Local changes detected in {rec_file_name}. Overwrite? [y/N/a] (a=all)",
+                            default="n"
+                        ).lower()
+                        
+                        if choice == 'a':
+                            force = True
+                        elif choice != 'y':
+                            console.print(f"Skipping {rec_file_name}")
+                            continue
+                
+                with open(file_path, "w") as f:
+                    f.write(code)
+                code_count += 1
+        
+        if code_count > 0:
+            console.print(f"[green]✓[/green] Synchronized {count} {file_type} records ({code_count} files).")
+        else:
+            console.print(f"[green]✓[/green] Synchronized {count} {file_type} records.")
     
     # Also pull schema definitions
     try:
@@ -191,76 +187,67 @@ def pull(
         console.print(f"[yellow]![/yellow] Warning: Failed to pull schemas during pull: {e}")
 
 @pull_app.command(name="schemas")
+@requires_auth
 def pull_schemas(
     object_type: str = typer.Argument(None, help="Specific object schema to pull."),
     profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
-    env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment."),
+    client: httpx.Client = None,  # type: ignore
+    auth: ValstormAuth = None,  # type: ignore
 ):
     """
     Download object schemas from the Valstorm cloud.
     """
     root = get_project_root()
-    auth = get_auth(profile=profile, env=env)
-    
-    if not auth.ensure_valid_token():
-        console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
-        raise typer.Exit(1)
-
     console.print(f"Pulling [cyan]schemas[/cyan] from [blue]{get_api_base_url(auth.env)}[/blue]...")
     
-    with auth.get_client() as client:
-        # If specific object requested, use the specific endpoint if it's more efficient, 
-        # but the current logic fetches all and filters. 
-        # Actually /schema returns everything, let's keep it simple for now or check if /schema/{object} is better.
-        endpoint = f"/schema/{object_type}" if object_type else "/schema"
-        response = client.get(endpoint)
+    endpoint = f"/schema/{object_type}" if object_type else "/schema"
+    response = client.get(endpoint)
+    
+    if response.status_code != 200:
+        console.print(f"[bold red]Fetch failed for schemas:[/bold red] {response.status_code}")
+        raise typer.Exit(1)
         
-        if response.status_code != 200:
-            console.print(f"[bold red]Fetch failed for schemas:[/bold red] {response.status_code}")
-            raise typer.Exit(1)
-            
-        data = response.json()
+    data = response.json()
         
-        if object_type:
-            # Response is a single schema object
-            schemas = {object_type: data}
-        else:
-            # Response is a map of schemas
-            schemas = data
-        
-        if not isinstance(schemas, dict):
-            console.print("[bold red]Unexpected response format for schemas.[/bold red]")
-            raise typer.Exit(1)
+    if object_type:
+        # Response is a single schema object
+        schemas = {object_type: data}
+    else:
+        # Response is a map of schemas
+        schemas = data
+    
+    if not isinstance(schemas, dict):
+        console.print("[bold red]Unexpected response format for schemas.[/bold red]")
+        raise typer.Exit(1)
 
-        target_dir = root / "schemas"
-        target_dir.mkdir(parents=True, exist_ok=True)
+    target_dir = root / "schemas"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    
+    count = 0
+    for api_name, schema_data in schemas.items():
+        file_path = target_dir / f"{api_name}.json"
+        with open(file_path, "w") as f:
+            json.dump(schema_data, f, indent=4)
+        count += 1
         
-        count = 0
-        for api_name, schema_data in schemas.items():
-            file_path = target_dir / f"{api_name}.json"
-            with open(file_path, "w") as f:
-                json.dump(schema_data, f, indent=4)
-            count += 1
-            
-        console.print(f"[green]✓[/green] Synchronized {count} schema files to {target_dir}")
+    console.print(f"[green]✓[/green] Synchronized {count} schema files to {target_dir}")
 
 @push_app.command(name="metadata")
+@requires_auth
 def push(
     api_name: str = typer.Argument(None, help="Specific object directory to push (e.g., record_trigger)."),
     file_name: str = typer.Argument(None, help="Specific file to push (e.g., trigger_name.py)."),
     manifest: str = typer.Option(None, "--manifest", "-m", help="Path to a deployment manifest JSON file."),
     profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
-    env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment."),
+    client: httpx.Client = None,  # type: ignore
+    auth: ValstormAuth = None,  # type: ignore
 ):
     """
     Upload local changes to the Valstorm cloud.
     """
     root = get_project_root()
-    auth = get_auth(profile=profile, env=env)
-    
-    if not auth.ensure_valid_token():
-        console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
-        raise typer.Exit(1)
 
     object_root = root / "object"
     if not object_root.exists():
@@ -386,33 +373,31 @@ def push(
         # 1. Handle Creates
         if creates_payload:
             console.print(f"Creating {len(creates_payload)} new [cyan]{file_type}[/cyan]s on [blue]{get_api_base_url(auth.env)}[/blue]...")
-            with auth.get_client() as client:
-                response = client.post(f"/object/{file_type}", json=creates_payload)
-                if response.status_code in [200, 201]:
-                    console.print(f"[bold green]✓ Successfully created {file_type} records.[/bold green]")
-                    newly_created = response.json() if isinstance(response.json(), list) else [response.json()]
-                    metadata.extend(newly_created)
-                else:
-                    console.print(f"[bold red]Create failed for {file_type}:[/bold red] {response.status_code}")
-                    console.print(response.text)
+            response = client.post(f"/object/{file_type}", json=creates_payload)
+            if response.status_code in [200, 201]:
+                console.print(f"[bold green]✓ Successfully created {file_type} records.[/bold green]")
+                newly_created = response.json() if isinstance(response.json(), list) else [response.json()]
+                metadata.extend(newly_created)
+            else:
+                console.print(f"[bold red]Create failed for {file_type}:[/bold red] {response.status_code}")
+                console.print(response.text)
 
         # 2. Handle Updates
         if updates_payload:
             console.print(f"Pushing {len(updates_payload)} updates for [cyan]{file_type}[/cyan] to [blue]{get_api_base_url(auth.env)}[/blue]...")
-            with auth.get_client() as client:
-                response = client.patch(f"/object/{file_type}", json=updates_payload)
-                if response.status_code in [200, 204]:
-                    console.print(f"[bold green]✓ Successfully updated {file_type} records.[/bold green]")
-                    updated_records = response.json() if response.status_code == 200 else []
-                    if updated_records:
-                        # Refresh metadata map for updating
-                        current_meta_map = {r["id"]: r for r in metadata}
-                        for updated in updated_records:
-                            current_meta_map[updated["id"]] = updated
-                        metadata = list(current_meta_map.values())
-                else:
-                    console.print(f"[bold red]Push failed for {file_type}:[/bold red] {response.status_code}")
-                    console.print(response.text)
+            response = client.patch(f"/object/{file_type}", json=updates_payload)
+            if response.status_code in [200, 204]:
+                console.print(f"[bold green]✓ Successfully updated {file_type} records.[/bold green]")
+                updated_records = response.json() if response.status_code == 200 else []
+                if updated_records:
+                    # Refresh metadata map for updating
+                    current_meta_map = {r["id"]: r for r in metadata}
+                    for updated in updated_records:
+                        current_meta_map[updated["id"]] = updated
+                    metadata = list(current_meta_map.values())
+            else:
+                console.print(f"[bold red]Push failed for {file_type}:[/bold red] {response.status_code}")
+                console.print(response.text)
         
         # Save updated metadata back to disk
         if creates_payload or updates_payload:
@@ -426,10 +411,13 @@ def push(
             console.print(f"No changes detected for [cyan]{file_type}[/cyan]s.")
 
 @push_app.command(name="web")
+@requires_auth
 def push_web(
     output_dir: Optional[str] = typer.Option(None, "--output-dir", "-o", help="Override the output base directory for scaffolded web pages."),
     profile: str = typer.Option(None, "--profile", "-p", help="Override the auth profile."),
-    env: str = typer.Option(None, "--env", "-e", help="Override the target environment.")
+    env: str = typer.Option(None, "--env", "-e", help="Override the target environment."),
+    client: httpx.Client = None,  # type: ignore
+    auth: ValstormAuth = None,  # type: ignore
 ):
     """
     Push local web pages (markdown documents with YAML frontmatter) from the web folder back to the Valstorm cloud.
@@ -438,11 +426,6 @@ def push_web(
     output_base_dir = Path(output_dir) if output_dir else root / "web"
     metadata_path = root / "object" / "app_page" / "app_page_metadata.json"
     
-    auth = get_auth(profile=profile, env=env)
-    if not auth.ensure_valid_token():
-        console.print("[bold red]Authentication failed.[/bold red] Please run `valstorm login`.")
-        raise typer.Exit(1)
-        
     if not output_base_dir.exists():
         console.print(f"[bold red]Error:[/bold red] Local web folder not found at {output_base_dir}")
         raise typer.Exit(1)
@@ -471,38 +454,36 @@ def push_web(
     # 1. Handle Creates
     if creates_payload:
         console.print(f"Creating {len(creates_payload)} new pages on [blue]{get_api_base_url(auth.env)}[/blue]...")
-        with auth.get_client() as client:
-            response = client.post("/object/app_page", json=creates_payload)
-            if response.status_code in [200, 201]:
-                console.print("[bold green]✓ Successfully created new app pages.[/bold green]")
-                newly_created = response.json() if isinstance(response.json(), list) else [response.json()]
-                
-                created_map = {r["slug"]: r for r in newly_created if r.get("slug")}
-                for i, r in enumerate(merged_metadata):
-                    if r.get("slug") in created_map:
-                        merged_metadata[i] = created_map[r["slug"]]
-            else:
-                console.print(f"[bold red]Create failed:[/bold red] {response.status_code}")
-                console.print(response.text)
-                raise typer.Exit(1)
-                
+        response = client.post("/object/app_page", json=creates_payload)
+        if response.status_code in [200, 201]:
+            console.print("[bold green]✓ Successfully created new app pages.[/bold green]")
+            newly_created = response.json() if isinstance(response.json(), list) else [response.json()]
+            
+            created_map = {r["slug"]: r for r in newly_created if r.get("slug")}
+            for i, r in enumerate(merged_metadata):
+                if r.get("slug") in created_map:
+                    merged_metadata[i] = created_map[r["slug"]]
+        else:
+            console.print(f"[bold red]Create failed:[/bold red] {response.status_code}")
+            console.print(response.text)
+            raise typer.Exit(1)
+            
     # 2. Handle Updates
     if updates_payload:
         console.print(f"Updating {len(updates_payload)} existing pages on [blue]{get_api_base_url(auth.env)}[/blue]...")
-        with auth.get_client() as client:
-            response = client.patch("/object/app_page", json=updates_payload)
-            if response.status_code in [200, 204]:
-                console.print("[bold green]✓ Successfully updated existing app pages.[/bold green]")
-                if response.status_code == 200:
-                    updated_records = response.json() if isinstance(response.json(), list) else [response.json()]
-                    updated_map = {r["id"]: r for r in updated_records if r.get("id")}
-                    for i, r in enumerate(merged_metadata):
-                        if r.get("id") in updated_map:
-                            merged_metadata[i] = updated_map[r["id"]]
-            else:
-                console.print(f"[bold red]Update failed:[/bold red] {response.status_code}")
-                console.print(response.text)
-                raise typer.Exit(1)
+        response = client.patch("/object/app_page", json=updates_payload)
+        if response.status_code in [200, 204]:
+            console.print("[bold green]✓ Successfully updated existing app pages.[/bold green]")
+            if response.status_code == 200:
+                updated_records = response.json() if isinstance(response.json(), list) else [response.json()]
+                updated_map = {r["id"]: r for r in updated_records if r.get("id")}
+                for i, r in enumerate(merged_metadata):
+                    if r.get("id") in updated_map:
+                        merged_metadata[i] = updated_map[r["id"]]
+        else:
+            console.print(f"[bold red]Update failed:[/bold red] {response.status_code}")
+            console.print(response.text)
+            raise typer.Exit(1)
                 
     # Save the updated merged metadata JSON back to disk
     try:

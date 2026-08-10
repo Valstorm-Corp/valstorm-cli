@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from rich.console import Console
-from .auth import get_auth, get_api_base_url, find_project_root, get_project_root, load_config
+from .auth import get_auth, get_api_base_url, find_project_root, get_project_root, load_config, requires_auth, ValstormAuth
 
 console = Console()
 auth_app = typer.Typer(help="Manage Valstorm authentication profiles and sessions.")
@@ -402,32 +402,29 @@ def logout(
         console.print(f"[yellow]Warning: Profile '{profile}' for environment '{env}' not found.[/yellow]")
 
 @auth_app.command()
+@requires_auth
 def whoami(
     profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
-    env: str = typer.Option(None, "--env", "-e", help="Target environment.")
+    env: str = typer.Option(None, "--env", "-e", help="Target environment."),
+    client: httpx.Client = None,  # type: ignore
 ):
     """
     Display current authenticated user info.
     """
-    auth = get_auth(profile=profile, env=env)
-    
-    if not auth.ensure_valid_token():
-        console.print("[bold red]Not logged in or token expired.[/bold red] Please run `valstorm login`.")
-        raise typer.Exit(1)
-        
-    with auth.get_client() as client:
-        response = client.get("/auth/load")
-        if response.status_code == 200:
-            data = response.json()
-            user = data.get("user", {})
-            console.print(f"Logged in as: [bold cyan]{user.get('name', 'Unknown')}[/bold cyan]")
-            console.print(f"Organization: [bold green]{user.get('organization_name', 'Unknown')}[/bold green]")
-            console.print(f"Email: {user.get('email', 'Unknown')}")
-            console.print(f"User ID: {user.get('id', 'Unknown')}")
-            console.print(f"Org Id: {user.get('organization_id', 'Unknown')}")
-            console.print(f"Role: {user.get('role', {}).get('name', 'Unknown')}")
-        else:
-            console.print(f"[bold red]Failed to load user data:[/bold red] {response.status_code}")
+    response = client.get("/auth/load")
+    if response.status_code == 200:
+        data = response.json()
+        user = data.get("user", {})
+        console.print(f"Logged in as: [bold cyan]{user.get('name', 'Unknown')}[/bold cyan]")
+        console.print(f"Organization: [bold green]{user.get('organization_name', 'Unknown')}[/bold green]")
+        console.print(f"Email: {user.get('email', 'Unknown')}")
+        console.print(f"User ID: {user.get('id', 'Unknown')}")
+        console.print(f"Org Id: {user.get('organization_id', 'Unknown')}")
+        role_info = user.get('role')
+        role_name = role_info.get('name') if isinstance(role_info, dict) else role_info or 'Unknown'
+        console.print(f"Role: {role_name}")
+    else:
+        console.print(f"[bold red]Failed to load user data:[/bold red] {response.status_code}")
 
 def get_pkce_pair():
     verifier = secrets.token_urlsafe(32)
@@ -440,21 +437,17 @@ def get_pkce_pair():
 pat_app = typer.Typer(help="Manage Personal Access Tokens (PATs).")
 
 @pat_app.command(name="create")
+@requires_auth
 def pat_create(
     name: str = typer.Argument(..., help="A name for this Personal Access Token."),
     expires_in_days: Optional[int] = typer.Option(30, "--expires", "-x", help="Expiration time in days. Use 0 or null for no expiration."),
     profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Authentication profile name."),
-    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment.")
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
+    client: httpx.Client = None,  # type: ignore
 ):
     """
     Create a new Personal Access Token (PAT).
     """
-    auth = get_auth(profile=profile, env=env)
-    
-    if not auth.ensure_valid_token():
-        console.print("[bold red]Not logged in or token expired.[/bold red] Please run `valstorm login`.")
-        raise typer.Exit(1)
-        
     payload: dict = {
         "name": name,
     }
@@ -463,93 +456,82 @@ def pat_create(
     else:
         payload["expires_in_days"] = None
 
-    with auth.get_client() as client:
-        res = client.post("/auth/pats", json=payload)
-        if res.status_code == 200:
-            data = res.json()
-            console.print("[bold green]✓ Personal Access Token created successfully![/bold green]")
-            console.print(f"Name: [bold cyan]{data['name']}[/bold cyan]")
-            console.print(f"ID: [bold]{data['id']}[/bold]")
-            if data.get('expires_at'):
-                console.print(f"Expires At: [yellow]{data['expires_at']}[/yellow]")
-            else:
-                console.print("Expires At: [yellow]Never[/yellow]")
-            console.print("\n[bold red]IMPORTANT: Copy the token below. It will not be shown again.[/bold red]")
-            console.print(f"[bold green]{data['token']}[/bold green]\n")
+    res = client.post("/auth/pats", json=payload)
+    if res.status_code == 200:
+        data = res.json()
+        console.print("[bold green]✓ Personal Access Token created successfully![/bold green]")
+        console.print(f"Name: [bold cyan]{data['name']}[/bold cyan]")
+        console.print(f"ID: [bold]{data['id']}[/bold]")
+        if data.get('expires_at'):
+            console.print(f"Expires At: [yellow]{data['expires_at']}[/yellow]")
         else:
-            console.print(f"[bold red]Failed to create PAT:[/bold red] {res.status_code}")
-            console.print(res.text)
-            raise typer.Exit(1)
+            console.print("Expires At: [yellow]Never[/yellow]")
+        console.print("\n[bold red]IMPORTANT: Copy the token below. It will not be shown again.[/bold red]")
+        console.print(f"[bold green]{data['token']}[/bold green]\n")
+    else:
+        console.print(f"[bold red]Failed to create PAT:[/bold red] {res.status_code}")
+        console.print(res.text)
+        raise typer.Exit(1)
 
 @pat_app.command(name="list")
+@requires_auth
 def pat_list(
     profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Authentication profile name."),
-    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment.")
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
+    client: httpx.Client = None,  # type: ignore
 ):
     """
     List your active Personal Access Tokens (PATs).
     """
-    auth = get_auth(profile=profile, env=env)
-    
-    if not auth.ensure_valid_token():
-        console.print("[bold red]Not logged in or token expired.[/bold red] Please run `valstorm login`.")
-        raise typer.Exit(1)
+    res = client.get("/auth/pats")
+    if res.status_code == 200:
+        pats = res.json()
+        if not pats:
+            console.print("[yellow]You have no active Personal Access Tokens.[/yellow]")
+            return
         
-    with auth.get_client() as client:
-        res = client.get("/auth/pats")
-        if res.status_code == 200:
-            pats = res.json()
-            if not pats:
-                console.print("[yellow]You have no active Personal Access Tokens.[/yellow]")
-                return
-            
-            from rich.table import Table
-            table = Table(title="Personal Access Tokens (PATs)")
-            table.add_column("ID", style="cyan")
-            table.add_column("Name", style="bold")
-            table.add_column("Created At", style="green")
-            table.add_column("Expires At", style="yellow")
-            table.add_column("Last Used At", style="magenta")
-            
-            for p in pats:
-                expires_at = p.get("expires_at") or "Never"
-                last_used = p.get("last_used_at") or "Never"
-                table.add_row(
-                    p["id"],
-                    p["name"],
-                    p["created_at"],
-                    expires_at,
-                    last_used
-                )
-            console.print(table)
-        else:
-            console.print(f"[bold red]Failed to list PATs:[/bold red] {res.status_code}")
-            console.print(res.text)
-            raise typer.Exit(1)
+        from rich.table import Table
+        table = Table(title="Personal Access Tokens (PATs)")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name", style="bold")
+        table.add_column("Created At", style="green")
+        table.add_column("Expires At", style="yellow")
+        table.add_column("Last Used At", style="magenta")
+        
+        for p in pats:
+            expires_at = p.get("expires_at") or "Never"
+            last_used = p.get("last_used_at") or "Never"
+            table.add_row(
+                p["id"],
+                p["name"],
+                p["created_at"],
+                expires_at,
+                last_used
+            )
+        console.print(table)
+    else:
+        console.print(f"[bold red]Failed to list PATs:[/bold red] {res.status_code}")
+        console.print(res.text)
+        raise typer.Exit(1)
 
 @pat_app.command(name="revoke")
+@requires_auth
 def pat_revoke(
     pat_id: str = typer.Argument(..., help="The ID of the Personal Access Token to revoke."),
     profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Authentication profile name."),
-    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment.")
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
+    client: httpx.Client = None,  # type: ignore
 ):
     """
     Revoke a Personal Access Token (PAT).
     """
-    auth = get_auth(profile=profile, env=env)
-    
-    if not auth.ensure_valid_token():
-        console.print("[bold red]Not logged in or token expired.[/bold red] Please run `valstorm login`.")
+    res = client.delete(f"/auth/pats/{pat_id}")
+    if res.status_code == 200:
+        console.print(f"[bold green]✓ PAT '{pat_id}' successfully revoked.[/bold green]")
+    else:
+        console.print(f"[bold red]Failed to revoke PAT:[/bold red] {res.status_code}")
+        console.print(res.text)
         raise typer.Exit(1)
-        
-    with auth.get_client() as client:
-        res = client.delete(f"/auth/pats/{pat_id}")
-        if res.status_code == 200:
-            console.print(f"[bold green]✓ PAT '{pat_id}' successfully revoked.[/bold green]")
-        else:
-            console.print(f"[bold red]Failed to revoke PAT:[/bold red] {res.status_code}")
-            console.print(res.text)
-            raise typer.Exit(1)
 
 @pat_app.command(name="delete", hidden=True)
 def pat_delete(
@@ -560,7 +542,7 @@ def pat_delete(
     """
     Revoke a Personal Access Token (PAT) (alias for revoke).
     """
-    pat_revoke(pat_id=pat_id, profile=profile, env=env)
+    pat_revoke(pat_id, profile=profile, env=env)  # type: ignore
 
 auth_app.add_typer(pat_app, name="pat")
 

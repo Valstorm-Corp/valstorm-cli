@@ -6,7 +6,7 @@ import webbrowser
 import httpx
 from pathlib import Path
 from rich.console import Console
-from .auth import get_auth, get_web_url, get_project_root, load_config
+from .auth import get_auth, get_web_url, get_project_root, load_config, requires_auth, ValstormAuth
 
 console = Console()
 project_app = typer.Typer(help="Manage local workspace settings and stubs.")
@@ -187,41 +187,32 @@ def update_stubs_command(
     _write_ai_configs(root, env=env, profile=profile)
 
 @project_app.command(name="open")
+@requires_auth
 def open_browser(
     profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
-    env: str = typer.Option(None, "--env", "-e", help="Target environment.")
+    env: str = typer.Option(None, "--env", "-e", help="Target environment."),
+    client: httpx.Client = None,  # type: ignore
+    auth: ValstormAuth = None,  # type: ignore
 ):
     """
     Open the Valstorm web application in your browser, pre-authenticated.
     """
-    auth = get_auth(profile=profile, env=env)
-    
-    if not auth.ensure_valid_token():
-        console.print("[bold red]Not logged in or token expired.[/bold red] Please run `valstorm login`.")
+    # 1. Get Exchange Token from API
+    res = client.post("/auth/cli-browser-token")
+    if res.status_code != 200:
+        console.print(f"[bold red]Failed to generate browser token:[/bold red] {res.text}")
         raise typer.Exit(1)
-        
-    with auth.get_client() as client:
-        try:
-            # 1. Get Exchange Token from API
-            res = client.post("/auth/cli-browser-token")
-            if res.status_code != 200:
-                console.print(f"[bold red]Failed to generate browser token:[/bold red] {res.text}")
-                raise typer.Exit(1)
-            
-            exchange_code = res.json()["exchange_code"]
+    
+    exchange_code = res.json()["exchange_code"]
 
-            # 2. Build Web URL
-            base_web_url = get_web_url(auth.env)
-            # Remove trailing slash if present
-            if base_web_url.endswith("/"):
-                base_web_url = base_web_url[:-1]
+    # 2. Build Web URL
+    base_web_url = get_web_url(auth.env)
+    # Remove trailing slash if present
+    if base_web_url.endswith("/"):
+        base_web_url = base_web_url[:-1]
 
-            target_url = f"{base_web_url}/cli-login?code={exchange_code}"
+    target_url = f"{base_web_url}/cli-login?code={exchange_code}"
 
-            console.print(f"Opening [bold blue]{base_web_url}[/bold blue] as [bold cyan]{auth.profile}[/bold cyan]...")
-            webbrowser.open(target_url)
-            
-        except httpx.RequestError as e:
-            console.print(f"[bold red]Connection Error:[/bold red] {e}")
-            raise typer.Exit(1)
+    console.print(f"Opening [bold blue]{base_web_url}[/bold blue] as [bold cyan]{auth.profile}[/bold cyan]...")
+    webbrowser.open(target_url)
 

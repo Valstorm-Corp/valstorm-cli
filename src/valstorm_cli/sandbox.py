@@ -2,7 +2,7 @@ import typer
 import httpx
 from typing import Optional, List
 from rich.console import Console
-from .auth import ValstormAuth, get_api_base_url
+from .auth import ValstormAuth, requires_auth, get_project_root, load_config
 
 console = Console()
 sandbox_app = typer.Typer(help="Manage developer sandboxes.")
@@ -10,34 +10,21 @@ sandbox_app = typer.Typer(help="Manage developer sandboxes.")
 users_app = typer.Typer(help="Manage users in a sandbox.")
 sandbox_app.add_typer(users_app, name="users")
 
-def _get_auth() -> ValstormAuth:
-    auth = ValstormAuth(use_parent=True)
-    if not auth.ensure_valid_token():
-        console.print("[bold red]Not authenticated or failed to refresh.[/bold red] Run 'valstorm login' first.")
-        raise typer.Exit(1)
-    return auth
-
 @sandbox_app.command("create")
+@requires_auth(use_parent=True)
 def create_sandbox(
     name: str = typer.Argument(..., help="Lowercase alphanumeric name for the sandbox (e.g., 'dev')."),
-    description: Optional[str] = typer.Option(None, "--description", "-d", help="Markdown description for the sandbox.")
+    description: Optional[str] = typer.Option(None, "--description", "-d", help="Markdown description for the sandbox."),
+    client: httpx.Client = None,  # type: ignore
 ):
     """Provisions a new sandbox database and copies configuration."""
-    auth = _get_auth()
-    base_url = get_api_base_url()
-    
     payload = {"name": name}
     if description:
         payload["description"] = description
         
     console.print(f"Creating sandbox [bold cyan]{name}[/bold cyan]...")
     try:
-        response = httpx.post(
-            f"{base_url}/sandbox",
-            json=payload,
-            headers={"Authorization": f"Bearer {auth.access_token}"},
-            timeout=120.0
-        )
+        response = client.post("/sandbox", json=payload, timeout=120.0)
         response.raise_for_status()
         data = response.json()
         console.print(f"[bold green]✓ Sandbox '{name}' created successfully![/bold green]")
@@ -50,18 +37,14 @@ def create_sandbox(
         raise typer.Exit(1)
 
 @sandbox_app.command("list")
-def list_sandboxes():
+@requires_auth(use_parent=True)
+def list_sandboxes(
+    client: httpx.Client = None,  # type: ignore
+):
     """Lists all sandbox environments associated with the active production organization."""
-    auth = _get_auth()
-    base_url = get_api_base_url()
-    
     console.print("Fetching sandboxes...")
     try:
-        response = httpx.get(
-            f"{base_url}/sandbox",
-            headers={"Authorization": f"Bearer {auth.access_token}"},
-            timeout=30.0
-        )
+        response = client.get("/sandbox", timeout=30.0)
         response.raise_for_status()
         data = response.json()
         
@@ -87,18 +70,15 @@ def list_sandboxes():
         raise typer.Exit(1)
 
 @sandbox_app.command("refresh")
-def refresh_sandbox(name: str = typer.Argument(..., help="Sandbox name to refresh (e.g., 'dev')")):
+@requires_auth(use_parent=True)
+def refresh_sandbox(
+    name: str = typer.Argument(..., help="Sandbox name to refresh (e.g., 'dev')"),
+    client: httpx.Client = None,  # type: ignore
+):
     """Wipes the sandbox database and re-clones configuration from production."""
-    auth = _get_auth()
-    base_url = get_api_base_url()
-    
     console.print(f"Refreshing sandbox [bold cyan]{name}[/bold cyan]... (This may take a minute)")
     try:
-        response = httpx.post(
-            f"{base_url}/sandbox/{name}/refresh",
-            headers={"Authorization": f"Bearer {auth.access_token}"},
-            timeout=180.0
-        )
+        response = client.post(f"/sandbox/{name}/refresh", timeout=180.0)
         response.raise_for_status()
         console.print(f"[bold green]✓ Sandbox '{name}' refreshed successfully![/bold green]")
     except httpx.HTTPStatusError as e:
@@ -109,14 +89,13 @@ def refresh_sandbox(name: str = typer.Argument(..., help="Sandbox name to refres
         raise typer.Exit(1)
 
 @sandbox_app.command("delete")
+@requires_auth(use_parent=True)
 def delete_sandbox(
     name: str = typer.Argument(..., help="Sandbox name to delete (e.g., 'dev')"),
-    force: bool = typer.Option(False, "--force", "-f", help="Force deletion without prompting.")
+    force: bool = typer.Option(False, "--force", "-f", help="Force deletion without prompting."),
+    client: httpx.Client = None,  # type: ignore
 ):
     """Permanently deletes a sandbox and all its contents."""
-    auth = _get_auth()
-    base_url = get_api_base_url()
-    
     if not force:
         confirm = typer.confirm(f"Are you sure you want to permanently delete the sandbox '{name}'?")
         if not confirm:
@@ -125,11 +104,7 @@ def delete_sandbox(
             
     console.print(f"Deleting sandbox [bold cyan]{name}[/bold cyan]...")
     try:
-        response = httpx.delete(
-            f"{base_url}/sandbox/{name}",
-            headers={"Authorization": f"Bearer {auth.access_token}"},
-            timeout=120.0
-        )
+        response = client.delete(f"/sandbox/{name}", timeout=120.0)
         response.raise_for_status()
         console.print(f"[bold green]✓ Sandbox '{name}' deleted successfully![/bold green]")
     except httpx.HTTPStatusError as e:
@@ -140,22 +115,16 @@ def delete_sandbox(
         raise typer.Exit(1)
 
 @users_app.command("add")
+@requires_auth(use_parent=True)
 def add_users(
     name: str = typer.Argument(..., help="Sandbox name"),
-    users: List[str] = typer.Argument(..., help="List of User IDs or Emails to add")
+    users: List[str] = typer.Argument(..., help="List of User IDs or Emails to add"),
+    client: httpx.Client = None,  # type: ignore
 ):
     """Add users to a sandbox environment."""
-    auth = _get_auth()
-    base_url = get_api_base_url()
-    
     console.print(f"Adding users to sandbox [bold cyan]{name}[/bold cyan]...")
     try:
-        response = httpx.post(
-            f"{base_url}/sandbox/{name}/users",
-            json={"users": users},
-            headers={"Authorization": f"Bearer {auth.access_token}"},
-            timeout=60.0
-        )
+        response = client.post(f"/sandbox/{name}/users", json={"users": users}, timeout=60.0)
         response.raise_for_status()
         data = response.json()
         added = data.get("added_users", [])
@@ -170,22 +139,19 @@ def add_users(
         raise typer.Exit(1)
 
 @users_app.command("remove")
+@requires_auth(use_parent=True)
 def remove_users(
     name: str = typer.Argument(..., help="Sandbox name"),
-    users: List[str] = typer.Argument(..., help="List of User IDs or Emails to remove")
+    users: List[str] = typer.Argument(..., help="List of User IDs or Emails to remove"),
+    client: httpx.Client = None,  # type: ignore
 ):
     """Remove users from a sandbox environment."""
-    auth = _get_auth()
-    base_url = get_api_base_url()
-    
     console.print(f"Removing users from sandbox [bold cyan]{name}[/bold cyan]...")
     try:
-        # httpx.request is used because delete method with body isn't supported directly via client.delete
-        response = httpx.request(
+        response = client.request(
             method="DELETE",
-            url=f"{base_url}/sandbox/{name}/users",
+            url=f"/sandbox/{name}/users",
             json={"users": users},
-            headers={"Authorization": f"Bearer {auth.access_token}"},
             timeout=60.0
         )
         response.raise_for_status()
@@ -203,13 +169,14 @@ def remove_users(
 
 
 @sandbox_app.command("use")
+@requires_auth(use_parent=True)
 def use_sandbox(
-    name: str = typer.Argument(..., help="The name of the sandbox to switch to.")
+    name: str = typer.Argument(..., help="The name of the sandbox to switch to."),
+    client: httpx.Client = None,  # type: ignore
 ):
     """
     Switch the local workspace target to a specific sandbox.
     """
-    from .auth import get_project_root, load_config
     import json
     
     try:
@@ -221,14 +188,8 @@ def use_sandbox(
     config = load_config(root)
     
     # Optional: Verify sandbox actually exists in parent org by listing them
-    auth = _get_auth() # uses use_parent=True internally
-    base_url = get_api_base_url()
     try:
-        res = httpx.get(
-            f"{base_url}/sandbox",
-            headers={"Authorization": f"Bearer {auth.access_token}"},
-            timeout=10.0
-        )
+        res = client.get("/sandbox", timeout=10.0)
         if res.status_code == 200:
             sandboxes = res.json()
             sandbox_names = [s.get("sandbox_name") for s in sandboxes if s.get("sandbox_name")]
@@ -263,7 +224,6 @@ def use_parent():
     """
     Switch the local workspace target back to the parent production/dev organization.
     """
-    from .auth import get_project_root, load_config
     import json
     
     try:
@@ -288,4 +248,3 @@ def switch_back():
     Alias for use-parent.
     """
     use_parent()
-

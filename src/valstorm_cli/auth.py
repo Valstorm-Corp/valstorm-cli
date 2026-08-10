@@ -1,9 +1,11 @@
+import functools
+import inspect
 import json
 import os
 import sys
 import typer
 from pathlib import Path
-from typing import Optional
+from typing import Generator, Optional
 from rich.console import Console
 
 import httpx
@@ -104,6 +106,30 @@ def get_auth_file(env: str, profile: str) -> Path:
     return new_path
 
 
+class ValstormHTTPAuth(httpx.Auth):
+    """
+    Transparently handles injecting the Bearer token and refreshing it
+    on 401 Unauthorized responses mid-flight.
+    """
+    def __init__(self, auth_manager: 'ValstormAuth'):
+        self.auth_manager = auth_manager
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        token = self.auth_manager.access_token
+        if token:
+            request.headers["Authorization"] = f"Bearer {token}"
+        
+        response = yield request
+        
+        if response.status_code == 401:
+            success = self.auth_manager.refresh_auth()
+            if success:
+                new_token = self.auth_manager.access_token
+                if new_token:
+                    request.headers["Authorization"] = f"Bearer {new_token}"
+                    yield request
+
+
 class ValstormAuth:
     _validation_cache = {} # (env, profile) -> bool
 
@@ -171,13 +197,15 @@ class ValstormAuth:
             print(f"Error saving tokens for profile {self.profile}: {e}", file=sys.stderr)
 
 
-    def get_client(self) -> httpx.Client:
-        """Returns a synchronous HTTPX client configured with auth headers."""
-        headers = {}
-        if self.access_token:
-            headers["Authorization"] = f"Bearer {self.access_token}"
-        
-        return httpx.Client(base_url=get_api_base_url(self.env), headers=headers, timeout=10.0)
+    def get_client(self, **kwargs) -> httpx.Client:
+        """Returns an httpx.Client equipped with automatic token refresh."""
+        base_url = get_api_base_url(self.env)
+        timeout = kwargs.get("timeout", 10.0)
+        return httpx.Client(
+            base_url=base_url,
+            auth=ValstormHTTPAuth(self),
+            timeout=timeout
+        )
 
     def refresh_auth(self) -> bool:
         if not self.refresh_token:
@@ -394,3 +422,52 @@ def get_auth(profile: Optional[str] = None, env: Optional[str] = None, use_paren
             pass
 
     return ValstormAuth(profile=auth_profile, env=auth_env, use_parent=use_parent)
+
+
+def requires_auth(func=None, *, use_parent: bool = False):
+    """
+    Wraps a Typer command to automatically initialize ValstormAuth 
+    and inject an auto-refreshing `httpx.Client`.
+    """
+    def decorator(f):
+        sig = inspect.signature(f)
+        params = [p for name, p in sig.parameters.items() if name not in ('client', 'auth')]
+        new_sig = sig.replace(parameters=params)
+        
+        @functools.wraps(f)
+        def wrapper(*args, **kwargs):
+            profile = kwargs.get('profile')
+            env = kwargs.get('env')
+            
+            auth_manager = get_auth(profile=profile, env=env, use_parent=use_parent)
+            
+            if auth_manager.sandbox:
+                if not auth_manager.ensure_valid_token():
+                    raise typer.Exit(1)
+                    
+            if not auth_manager.access_token:
+                console.print("[bold red]Not logged in.[/bold red] Please run `valstorm login`.")
+                raise typer.Exit(1)
+                
+            client = auth_manager.get_client()
+            
+            try:
+                if 'client' in sig.parameters and 'client' not in kwargs:
+                    kwargs['client'] = client
+                if 'auth' in sig.parameters and 'auth' not in kwargs:
+                    kwargs['auth'] = auth_manager
+                    
+                return f(*args, **kwargs)
+            except httpx.RequestError as e:
+                console.print(f"[bold red]Connection Error:[/bold red] {e}")
+                raise typer.Exit(1)
+            finally:
+                client.close()
+                
+        wrapper.__signature__ = new_sig  # type: ignore
+        return wrapper
+
+    if func is None:
+        return decorator
+    return decorator(func)
+

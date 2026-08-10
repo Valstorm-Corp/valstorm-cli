@@ -6,7 +6,7 @@ from typing import Optional
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table
-from .auth import ValstormAuth
+from .auth import ValstormAuth, requires_auth
 
 console = Console()
 query_app = typer.Typer(help="Execute Queries", no_args_is_help=True)
@@ -88,6 +88,7 @@ def save_query_to_file(query_str: str, file_path: str):
         console.print(f"[bold red]Failed to save query file:[/bold red] {e}")
 
 @query_app.command(name="sql")
+@requires_auth
 def sql(
     query: Optional[str] = typer.Argument(None, help="The SQL query to execute."),
     file: Optional[str] = typer.Option(None, "--file", help="Execute query from file."),
@@ -97,7 +98,8 @@ def sql(
     output: str = typer.Option("table", "--output", "-o", help="Output format (table, json)."),
     bypass_cache: bool = typer.Option(False, "--bypass-cache", help="Bypass the query cache."),
     save: Optional[str] = typer.Option(None, "--save", "-s", help="Save results to a JSON file."),
-    csv_file: Optional[str] = typer.Option(None, "--csv", help="Save results to a CSV file.")
+    csv_file: Optional[str] = typer.Option(None, "--csv", help="Save results to a CSV file."),
+    client: httpx.Client = None  # type: ignore
 ):
     """Execute a SQL-like query against the Valstorm API."""
     query_str = get_query_string(query, file)
@@ -105,30 +107,20 @@ def sql(
     if save_query:
         save_query_to_file(query_str, save_query)
         
-    auth = ValstormAuth(profile=profile, env=env)
-    if not auth.ensure_valid_token():
-        console.print("[bold red]Not logged in or token expired.[/bold red] Please run `valstorm login`.")
+    response = client.post("/query", json={
+        "query": query_str,
+        "bypass_cache": bypass_cache
+    })
+    
+    if response.status_code != 200:
+        console.print(f"[bold red]Query failed ({response.status_code}):[/bold red] {response.text}")
         raise typer.Exit(1)
         
-    with auth.get_client() as client:
-        try:
-            response = client.post("/query", json={
-                "query": query_str,
-                "bypass_cache": bypass_cache
-            })
-            
-            if response.status_code != 200:
-                console.print(f"[bold red]Query failed ({response.status_code}):[/bold red] {response.text}")
-                raise typer.Exit(1)
-                
-            data = response.json()
-            handle_query_save_and_output(data, output, save, csv_file)
-                    
-        except httpx.RequestError as e:
-            console.print(f"[bold red]Connection Error:[/bold red] {e}")
-            raise typer.Exit(1)
+    data = response.json()
+    handle_query_save_and_output(data, output, save, csv_file)
 
 @query_app.command(name="graphql")
+@requires_auth
 def graphql(
     query: Optional[str] = typer.Argument(None, help="The GraphQL query to execute."),
     file: Optional[str] = typer.Option(None, "--file", help="Execute query from file."),
@@ -137,7 +129,8 @@ def graphql(
     env: str = typer.Option(None, "--env", "-e", help="Target environment."),
     output: str = typer.Option("json", "--output", "-o", help="Output format (table, json)."),
     save: Optional[str] = typer.Option(None, "--save", "-s", help="Save results to a JSON file."),
-    csv_file: Optional[str] = typer.Option(None, "--csv", help="Save results to a CSV file.")
+    csv_file: Optional[str] = typer.Option(None, "--csv", help="Save results to a CSV file."),
+    client: httpx.Client = None  # type: ignore
 ):
     """Execute a GraphQL query against the Valstorm API."""
     query_str = get_query_string(query, file)
@@ -145,24 +138,13 @@ def graphql(
     if save_query:
         save_query_to_file(query_str, save_query)
         
-    auth = ValstormAuth(profile=profile, env=env)
-    if not auth.ensure_valid_token():
-        console.print("[bold red]Not logged in or token expired.[/bold red] Please run `valstorm login`.")
+    response = client.post("/graphql", json={
+        "query": query_str
+    })
+    
+    if response.status_code != 200:
+        console.print(f"[bold red]GraphQL Query failed ({response.status_code}):[/bold red] {response.text}")
         raise typer.Exit(1)
         
-    with auth.get_client() as client:
-        try:
-            response = client.post("/graphql", json={
-                "query": query_str
-            })
-            
-            if response.status_code != 200:
-                console.print(f"[bold red]GraphQL Query failed ({response.status_code}):[/bold red] {response.text}")
-                raise typer.Exit(1)
-                
-            data = response.json()
-            handle_query_save_and_output(data, output, save, csv_file)
-                    
-        except httpx.RequestError as e:
-            console.print(f"[bold red]Connection Error:[/bold red] {e}")
-            raise typer.Exit(1)
+    data = response.json()
+    handle_query_save_and_output(data, output, save, csv_file)
