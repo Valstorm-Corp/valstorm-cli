@@ -42,8 +42,51 @@ def vfs_list(
 ):
     """List files and directories in a given vault."""
     if not vault_id:
-        vault_id = "root"
-    
+        try:
+            res = client.get("/vfs/tree")
+            handle_error(res, json_output)
+            data = res.json()
+        except httpx.RequestError as e:
+            if json_output:
+                print(json.dumps({"error": str(e)}))
+            else:
+                console.print(f"[bold red]Network Error:[/bold red] {e}")
+            sys.exit(2)
+
+        if json_output:
+            print(json.dumps(data, indent=2))
+            return
+
+        console.print("\n[bold]Virtual File System (VFS) Vault Tree[/bold]\n")
+        from rich.tree import Tree
+        
+        vaults = data.get("vaults", [])
+        vaults_by_id = {v["id"]: v for v in vaults}
+        children_map = {}
+        roots = []
+        for v in vaults:
+            pid = v.get("parent_vault")
+            if not pid or pid not in vaults_by_id:
+                roots.append(v)
+            else:
+                children_map.setdefault(pid, []).append(v)
+                
+        def add_node(tree_node, vault):
+            v_name = vault.get('name', 'Unknown')
+            v_id = vault.get('id', '')
+            paths = vault.get('vault_paths', [])
+            path_str = f" ({paths[0]})" if paths else ""
+            node = tree_node.add(f"[cyan]{v_name}[/cyan] [dim]{v_id}[/dim]{path_str}")
+            for child in children_map.get(v_id, []):
+                add_node(node, child)
+                
+        tree = Tree("Root")
+        for root in roots:
+            add_node(tree, root)
+            
+        console.print(tree)
+        return
+        
     try:
         res = client.get(f"/vfs/vault/{vault_id}")
         handle_error(res, json_output)
