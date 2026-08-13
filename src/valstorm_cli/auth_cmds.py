@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from rich.console import Console
-from .auth import get_auth, get_api_base_url, find_project_root, get_project_root, load_config, requires_auth, ValstormAuth
+from .auth import get_auth, get_api_base_url, get_web_url, find_project_root, get_project_root, load_config, requires_auth, ValstormAuth
 
 console = Console()
 auth_app = typer.Typer(help="Manage Valstorm authentication profiles and sessions.")
@@ -22,6 +22,9 @@ auth_app = typer.Typer(help="Manage Valstorm authentication profiles and session
 
 
 
+
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
 
 class OAuthCallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -259,24 +262,26 @@ def login(
         
         with httpx.Client(base_url=get_api_base_url(auth.env)) as client:
             try:
-                # 1. Get Authorize URL from API
-                auth_res = client.post("/oauth2/authorize", json={
+                # 1. Build Authorize URL directly
+                web_base = get_web_url(auth.env)
+                from urllib.parse import urlencode
+                params = {
                     "client_id": client_id,
                     "redirect_uri": redirect_uri,
                     "response_type": "code",
                     "state": state,
                     "code_challenge": challenge
-                })
-                
-                if auth_res.status_code != 200:
-                    console.print(f"[bold red]Authorization failed:[/bold red] {auth_res.text}")
-                    console.print("[yellow]Hint: Ensure you have an Integrated App with client_id 'valstorm-cli' and redirect_uri 'http://127.0.0.1:8011/callback' configured in your organization.[/yellow]")
-                    raise typer.Exit(1)
-                
-                authorize_url = auth_res.json()["redirect_url"]
+                }
+                authorize_url = f"{web_base}/oauth2/login?{urlencode(params)}"
                 
                 # 2. Start local server
-                server = HTTPServer(("127.0.0.1", port), OAuthCallbackHandler)
+                try:
+                    server = ReusableHTTPServer(("127.0.0.1", port), OAuthCallbackHandler)
+                except OSError as e:
+                    console.print(f"[bold red]Failed to start local server on port {port}:[/bold red] {e}")
+                    console.print("[yellow]Hint: Ensure no other login process is running, or kill the process using this port.[/yellow]")
+                    raise typer.Exit(1)
+                    
                 server.auth_code = None
                 server.state = None
                 
@@ -288,7 +293,14 @@ def login(
                 webbrowser.open(authorize_url)
                 
                 # 3. Wait for code
+                timeout = 300  # 5 minutes
+                start_time = time.time()
                 while server.auth_code is None:
+                    if time.time() - start_time > timeout:
+                        console.print("\n[bold red]Login timed out after 5 minutes.[/bold red]")
+                        server.shutdown()
+                        server.server_close()
+                        raise typer.Exit(1)
                     try:
                         time.sleep(0.1)
                     except KeyboardInterrupt:
