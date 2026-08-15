@@ -489,6 +489,35 @@ class StandardOwnership(StandardBase):
     owner: str = Field(default=None, json_schema_extra={'default': None, 'format': 'lookup', 'modify': False, 'schema': 'user', 'system': True, 'title': 'Owner', 'type': 'string', 'api_name': 'owner'})
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
 
+class File(StandardOwnership):
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('file'))
+    location: str
+    extension: str
+    content_type: str
+    is_public: bool = False
+    link: Optional[str] = None
+    file_size: Optional[int] = 0
+    checksum: Optional[str] = None
+    status: Optional[str] = 'active'
+    current_version: Optional[int] = 1
+    version_count: Optional[int] = 1
+    latest_version_id: Optional[str] = None
+    latest_version: Optional[Any] = None
+
+class FileVersion(StandardOwnership):
+    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('five'))
+    name: str = ''
+    file: Union[PrefixedID, dict, str]
+    version_number: int = 1
+    location: str
+    link: Optional[str] = None
+    extension: Optional[str] = None
+    content_type: Optional[str] = None
+    file_size: Optional[int] = 0
+    checksum: Optional[str] = None
+    change_summary: Optional[str] = None
+    is_active: bool = False
+
 class App(StandardBase):
     version: str = '1.0.0'
     schemas: Optional[List] = []

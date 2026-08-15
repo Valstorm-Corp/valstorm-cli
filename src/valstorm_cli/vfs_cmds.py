@@ -748,3 +748,39 @@ def vfs_delete(
 
     if failed_count > 0:
         sys.exit(5 if failed_count < len(item_ids) else 2)
+
+
+@vfs_app.command("info")
+@requires_auth
+def vfs_info(
+    item_id: str = typer.Argument(..., help="File ID or Vault ID to inspect"),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
+    client: httpx.Client = None,  # type: ignore
+):
+    """Retrieve detailed metadata for a file or vault."""
+    try:
+        if item_id.startswith("vaul_"):
+            res = client.get(f"/vfs/vault/{item_id}")
+        else:
+            res = client.post("/query", json={"query": f"SELECT * FROM file WHERE id = '{item_id}' LIMIT 1"})
+        
+        handle_error(res, json_output)
+        data = res.json()
+        if isinstance(data, list) and len(data) > 0:
+            data = data[0]
+    except httpx.RequestError as e:
+        handle_network_error(e, json_output)
+
+    if json_output:
+        print(json.dumps(data, indent=2))
+        return
+
+    console.print(f"\n[bold]VFS Metadata Info:[/bold] [cyan]{item_id}[/cyan]\n")
+    if isinstance(data, dict):
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Property", style="cyan")
+        table.add_column("Value", style="green")
+        for k, v in data.items():
+            if k not in ("folders", "files"):
+                table.add_row(str(k), str(v))
+        console.print(table)
