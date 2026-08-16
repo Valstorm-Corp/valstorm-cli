@@ -424,7 +424,16 @@ class User(StandardBase):
     do_not_disturb: bool = False
     role: Optional[PrefixedID] = None
     manager: Optional[PrefixedID] = None
-    availability: Optional[UserAvailability] = UserAvailability()
+    availability: Optional[UserAvailability] = Field(default_factory=UserAvailability)
+
+    @field_validator('availability', mode='before')
+    @classmethod
+    def self_heal_availability(cls, v):
+        """
+        Intercepts explicit null values from MongoDB and self-heals
+        them into a default UserAvailability structure in memory.
+        """
+        pass
     integration_user: Optional[bool] = False
     is_impersonating: bool = False
     scopes: List[str] = Field(default_factory=list)
