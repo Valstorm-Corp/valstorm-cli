@@ -784,3 +784,139 @@ def vfs_info(
             if k not in ("folders", "files"):
                 table.add_row(str(k), str(v))
         console.print(table)
+
+
+@vfs_app.command("versions")
+@requires_auth
+def vfs_versions(
+    file_id: str = typer.Argument(..., help="File ID to list revisions for"),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
+    client: httpx.Client = None,  # type: ignore
+):
+    """List all historical revisions for a file."""
+    clean_id = file_id.replace("cloud://", "")
+    try:
+        res = client.get(f"/files/{clean_id}/versions")
+        handle_error(res, json_output)
+        data = res.json()
+    except httpx.RequestError as e:
+        handle_network_error(e, json_output)
+
+    if json_output:
+        print(json.dumps(data, indent=2))
+        return
+
+    versions = data.get("versions", [])
+    if not versions:
+        console.print(f"[yellow]No revisions found for file '{file_id}'.[/yellow]")
+        return
+
+    console.print(f"\n[bold]Version History for File:[/bold] [cyan]{file_id}[/cyan]\n")
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Version", style="bold cyan")
+    table.add_column("Status", style="green")
+    table.add_column("Version ID", style="dim")
+    table.add_column("Created Date")
+    table.add_column("Size (KB)", justify="right")
+
+    for v in versions:
+        is_active = v.get("is_active", False)
+        status_str = "[bold green]Active (Canon)[/bold green]" if is_active else "[dim]Historical[/dim]"
+        ver_num = f"v{v.get('version_number', 1.0)}"
+        size_kb = f"{(v.get('size', 0) / 1024):.1f}" if v.get("size") else "-"
+        table.add_row(ver_num, status_str, v.get("id", ""), v.get("created_date", ""), size_kb)
+
+    console.print(table)
+
+
+@vfs_app.command("set-active-version")
+@requires_auth
+def vfs_set_active_version(
+    file_id: str = typer.Argument(..., help="Target File ID"),
+    version_id: str = typer.Argument(..., help="Version ID (five_...) or Version Number (e.g. 2.0) to activate"),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
+    client: httpx.Client = None,  # type: ignore
+):
+    """Promote a specific file revision as the canonical active version."""
+    clean_id = file_id.replace("cloud://", "")
+    try:
+        res = client.post(f"/files/{clean_id}/active-version/{version_id}")
+        handle_error(res, json_output)
+        data = res.json()
+    except httpx.RequestError as e:
+        handle_network_error(e, json_output)
+
+    if json_output:
+        print(json.dumps(data, indent=2))
+        return
+
+    console.print(f"[bold green]✓ Successfully set version '{version_id}' as active canon for file '{file_id}'.[/bold green]")
+
+
+@vfs_app.command("index")
+@requires_auth
+def vfs_index(
+    target: str = typer.Argument(..., help="File ID, Version ID, or VFS Path to index"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force re-indexing even if already indexed"),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON response"),
+    client: httpx.Client = None,  # type: ignore
+):
+    """Trigger on-demand text extraction and vector indexing for a file."""
+    # Resolve path if target begins with '/'
+    file_id = target
+    if target.startswith("/"):
+        try:
+            resolve_res = client.get("/vfs/resolve", params={"path": target})
+            handle_error(resolve_res, json_output)
+            file_id = resolve_res.json().get("id")
+        except httpx.RequestError as e:
+            handle_network_error(e, json_output)
+
+    try:
+        res = client.post(f"/vfs/files/{file_id}/index", json={"force": force})
+        handle_error(res, json_output)
+        data = res.json()
+    except httpx.RequestError as e:
+        handle_network_error(e, json_output)
+
+    if json_output:
+        print(json.dumps(data, indent=2))
+        return
+
+    console.print(f"[bold green]✓[/bold green] Indexing task dispatched for file [cyan]{file_id}[/cyan] (Task: {data.get('task_id')})")
+
+
+@vfs_app.command("reindex")
+@requires_auth
+def vfs_reindex(
+    vault: Optional[str] = typer.Option(None, "--vault", "-v", help="Vault ID or path to reindex"),
+    all_vaults: bool = typer.Option(False, "--all", help="Reindex entire workspace"),
+    limit: int = typer.Option(100, "--limit", "-l", help="Batch size limit"),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON response"),
+    client: httpx.Client = None,  # type: ignore
+):
+    """Trigger batch backfill indexing across files in a vault or workspace."""
+    if not vault and not all_vaults:
+        handle_local_error("Must specify either --vault <id> or --all to confirm reindexing scope.", json_output)
+
+    payload = {"vault_id": vault, "limit": limit, "all": all_vaults}
+    try:
+        res = client.post("/vfs/index/batch", json=payload)
+        handle_error(res, json_output)
+        data = res.json()
+    except httpx.RequestError as e:
+        handle_network_error(e, json_output)
+
+    if json_output:
+        print(json.dumps(data, indent=2))
+        return
+
+    queued_count = data.get("total_files_queued", 0)
+    console.print(f"[bold green]✓[/bold green] Successfully queued [cyan]{queued_count}[/cyan] files for background indexing.")
+
+
+from .search_cmds import search_command, ask_command
+
+vfs_app.command("search", help="Search files, metadata, and document vector chunks across the workspace.")(search_command)
+vfs_app.command("ask", help="Ask natural language questions grounded in workspace documents with streaming AI answers.")(ask_command)
+

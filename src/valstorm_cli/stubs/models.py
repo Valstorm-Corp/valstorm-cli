@@ -377,7 +377,7 @@ class LicenseFeature(str, Enum):
     LIVE_CHAT = 'live_chat'
 
 class UserLicense(BetterBaseModel):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('lic'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('lic'))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     created_by: dict = {}
@@ -392,7 +392,7 @@ class UserLicense(BetterBaseModel):
     features: List[LicenseFeature] = []
 
 class StandardBase(BetterBaseModel):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('obj'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('obj'))
     name: str
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
@@ -440,7 +440,7 @@ class User(StandardBase):
     portal_id: Optional[str] = None
 
 class UserCreate(User):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('user'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('user'))
     password: str
 
 class OrganizationBase(StandardBase):
@@ -477,7 +477,7 @@ class PermissionMap(BaseModel):
     scopes: List[str] = []
 
 class Permission(StandardBase):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('per'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('per'))
     model_config = ConfigDict(extra='allow')
     object_field_permissions: Optional[dict] = {}
     object_permissions: Optional[dict] = {}
@@ -490,7 +490,7 @@ class StandardOwnership(StandardBase):
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
 
 class File(StandardOwnership):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('file'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('file'))
     location: str
     extension: str
     content_type: str
@@ -505,7 +505,7 @@ class File(StandardOwnership):
     latest_version: Optional[Any] = None
 
 class FileVersion(StandardOwnership):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('five'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('five'))
     name: str = ''
     file: Union[PrefixedID, dict, str]
     version_number: int = 1
@@ -532,7 +532,7 @@ class App(StandardBase):
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
 
 class IntegratedApp(StandardBase):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('inap'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('inap'))
     authentication_url: Optional[str] = None
     token_url: Optional[str] = None
     authentication_protocol: Optional[str] = None
@@ -549,7 +549,7 @@ class IntegratedApp(StandardBase):
     organization: Optional[str] = None
 
 class AuthCredential(StandardBase):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('aucr'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('aucr'))
     user: PrefixedID
     integrated_app: PrefixedID
     data: dict = {}
@@ -617,7 +617,7 @@ class SendNotificationSetting(BetterBaseModel):
     data: dict = {}
 
 class NotificationSubscriber(BetterBaseModel):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('nosu'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('nosu'))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     created_by: PrefixedID
@@ -630,7 +630,7 @@ class NotificationSubscriber(BetterBaseModel):
     object: Optional[PrefixedID] = None
 
 class NotificationSetting(BetterBaseModel):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('nose'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('nose'))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     created_by: PrefixedID
@@ -663,7 +663,7 @@ class NotificationSetting(BetterBaseModel):
     push_to_web: bool = False
 
 class Notification(BetterBaseModel):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('noti'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('noti'))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     created_by: Optional[PrefixedID] = None
@@ -810,7 +810,7 @@ class OutlookMessageSendRequest(BetterBaseModel):
         pass
 
 class Log(BetterBaseModel):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('log'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('log'))
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     created_by: PrefixedID
@@ -847,7 +847,7 @@ class BulkSend(BetterBaseModel):
     automation: Optional[str] = None
 
 class ScheduleTriggerSetting(BetterBaseModel):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('sts'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('sts'))
     name: str
     created_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
@@ -983,7 +983,7 @@ class TwilioSMS(BaseModel):
     campaign_id: Optional[str] = None
 
 class Function(BetterBaseModel):
-    id: PrefixedID = Field(default_factory=lambda : generate_base62_id('fun'))
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('fun'))
     name: str
     created_date: datetime = Field(default_factory=datetime.utcnow)
     modified_date: datetime = Field(default_factory=datetime.utcnow)

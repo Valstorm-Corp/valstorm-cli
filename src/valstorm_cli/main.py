@@ -47,6 +47,7 @@ from .schema import schema_app
 from .query import sql, graphql
 from .vfs_cmds import vfs_app
 from .hermes_cmds import hermes_app
+from .search_cmds import search_command, ask_command
 
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(record_app, name="record")
@@ -55,6 +56,8 @@ app.add_typer(vfs_app, name="vfs")
 app.add_typer(hermes_app, name="hermes")
 app.command(name="sql")(sql)
 app.command(name="graphql")(graphql)
+app.command(name="search", help="Hybrid semantic and metadata search across workspace")(search_command)
+app.command(name="ask", help="Ask conversational questions answered by workspace documents")(ask_command)
 console = Console()
 
 
