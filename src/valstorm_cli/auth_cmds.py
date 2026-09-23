@@ -114,13 +114,14 @@ def list_profiles():
     except Exception:
         pass
 
+    has_exact_match = any(entry["profile"] == active_profile and entry["env"] == active_env for entry in found)
+
     for entry in found:
-        is_active = (entry["profile"] == active_profile and entry["env"] == active_env)
+        is_active = (entry["profile"] == active_profile and entry["env"] == active_env) or (len(found) == 1 and not has_exact_match)
         marker = "[green]*[/green]" if is_active else " "
         console.print(f"{marker} Profile: [cyan]{entry['profile']}[/cyan] | Env: [blue]{entry['env']}[/blue] | Org: {entry['org']}")
         
-    if active_profile:
-        console.print("\n[dim]* Indicates currently targeted profile in valstorm.json[/dim]")
+    console.print("\n[dim]* Indicates active authentication profile[/dim]")
 
 @auth_app.command(name="switch")
 def switch_profile(

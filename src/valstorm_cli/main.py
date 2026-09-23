@@ -58,6 +58,36 @@ app.command(name="sql")(sql)
 app.command(name="graphql")(graphql)
 app.command(name="search", help="Hybrid semantic and metadata search across workspace")(search_command)
 app.command(name="ask", help="Ask conversational questions answered by workspace documents")(ask_command)
+
+
+@app.command(name="agent", help="Launch the Valstorm Autonomous AI Agent (vsagent)")
+@app.command(name="vsagent", hidden=True)
+def agent_command(
+    prompt: Optional[str] = typer.Argument(None, help="Optional task prompt to run immediately"),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Agent profile (e.g. developer, researcher)"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Model name"),
+    resume: Optional[str] = typer.Option(None, "--resume", "-r", help="Resume session ID"),
+):
+    """Launch the Valstorm Autonomous AI Agent CLI (vsagent)."""
+    vsagent_bin = shutil.which("vsagent") or shutil.which("vagent")
+    if not vsagent_bin:
+        console.print("[bold red]Error:[/bold red] vsagent is not installed on your PATH.")
+        console.print("Run [cyan]uv tool install --force apps/agent-runtime[/cyan] to install it.")
+        raise typer.Exit(1)
+
+    cmd = [vsagent_bin]
+    if prompt:
+        cmd.extend(["run", prompt])
+    if profile:
+        cmd.extend(["--profile", profile])
+    if model:
+        cmd.extend(["--model", model])
+    if resume:
+        cmd.extend(["--resume", resume])
+
+    subprocess.run(cmd)
+
+
 console = Console()
 
 
@@ -769,8 +799,8 @@ def deploy_marketplace(
         headers={"Authorization": f"Bearer {auth.access_token}"},
         timeout=120.0
     )
-    if response.status_code == 200:
-        console.print("[bold green]✓ Marketplace deployment successful![/bold green]")
+    if response.status_code in (200, 202):
+        console.print("[bold green]✓ Marketplace deployment initiated successfully![/bold green]")
         try:
             from rich.json import JSON
             console.print(JSON.from_data(response.json()))
@@ -804,8 +834,8 @@ def deploy_next_env(
         headers={"Authorization": f"Bearer {auth.access_token}"},
         timeout=120.0
     )
-    if response.status_code == 200:
-        console.print("[bold green]✓ Next environment deployment successful![/bold green]")
+    if response.status_code in (200, 202):
+        console.print("[bold green]✓ Next environment deployment initiated successfully![/bold green]")
         try:
             from rich.json import JSON
             console.print(JSON.from_data(response.json()))
@@ -840,8 +870,8 @@ def apply_subscribers(
         headers={"Authorization": f"Bearer {auth.access_token}"},
         timeout=120.0
     )
-    if response.status_code == 200:
-        console.print("[bold green]✓ Updates applied to subscribers![/bold green]")
+    if response.status_code in (200, 202):
+        console.print("[bold green]✓ Subscriber updates initiated successfully![/bold green]")
         try:
             from rich.json import JSON
             console.print(JSON.from_data(response.json()))

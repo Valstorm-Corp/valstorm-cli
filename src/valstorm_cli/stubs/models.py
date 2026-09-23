@@ -12,7 +12,7 @@ class PlatformContext: pass
 class Request: pass
 
 from enum import Enum
-from pydantic import BaseModel, EmailStr, Field, AfterValidator, ConfigDict, field_validator, model_serializer, SerializationInfo
+from pydantic import BaseModel, EmailStr, Field, AfterValidator, ConfigDict, field_validator, model_validator, model_serializer, SerializationInfo
 from typing import Optional, List, Union, Literal, Dict, Any, Annotated
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -33,7 +33,7 @@ PrefixedID = Annotated[str, AfterValidator(validate_prefixed_id)]
 
 def SystemPrefixedID() -> str:
     pass
-system_fields = ['id', 'name', 'created_date', 'modified_date', 'created_by', 'modified_by', 'schema', 'owner', 'shared_with']
+system_fields = ['id', 'name', 'created_date', 'modified_date', 'created_by', 'modified_by', 'schema', 'owner', 'shared_with', 'vaults', 'vault_paths']
 
 def ensure_utc(dt: datetime) -> datetime:
     """If a datetime is naive, set its timezone to UTC."""
@@ -191,7 +191,7 @@ class AiPrompt(BetterBaseModel):
     description: Optional[str] = None
     tag: Optional[List[Dict[str, Any]]] = None
     provider: Literal['OpenAI', 'Gemini'] = 'Gemini'
-    model: Optional[str] = 'gemini-2.5-flash-lite-preview-06-17'
+    model: Optional[str] = 'gemini-flash-lite-latest'
     prompts: List[Union[str, Dict[str, Any]]] = []
     general_config: Optional[Dict[str, Any]] = None
     inputs: Optional[List] = []
@@ -242,6 +242,13 @@ class DesktopSyncRequest(BetterBaseModel):
     device_pid: Optional[int] = None
     role: str = 'assistant'
     session_id: Optional[str] = None
+    input_tokens: Annotated[int, Field(default=0, strict=True, ge=0, le=9007199254740991)] = 0
+    output_tokens: Annotated[int, Field(default=0, strict=True, ge=0, le=9007199254740991)] = 0
+    model: Optional[str] = None
+    provider: Optional[str] = None
+    error: Optional[str] = Field(default=None, max_length=4096)
+    telemetry_sync_key: Optional[str] = None
+    message_id: Optional[str] = None
     run_id: Optional[str] = None
     step_id: Optional[str] = None
     parent_run_id: Optional[str] = None
@@ -250,11 +257,37 @@ class DesktopSyncRequest(BetterBaseModel):
     tool_result: Optional[Union[Dict[str, Any], List[Any], str]] = None
     subagent_results: Optional[List[Dict[str, Any]]] = None
     child_syncs: Optional[List[Dict[str, Any]]] = None
+    user_text: Optional[str] = None
+    user_message_id: Optional[str] = None
+    chat_name: Optional[str] = None
+
+    @field_validator('model', 'provider', 'error', 'chat_name', mode='before')
+    @classmethod
+    def normalize_optional_telemetry_string(cls, value: Any) -> Optional[str]:
+        pass
+
+class TaskOrchestrationRequest(BetterBaseModel):
+    task_id: str
+    description: str = ''
+    execution_environment: Optional[str] = 'cloud'
+    device: Optional[str] = None
+    device_id: Optional[str] = None
+    hermes_api_key: Optional[str] = None
+    provider: Optional[str] = None
 
 class MergeRecordsRequest(BetterBaseModel):
-    schema_api_name: str
-    master_record: str
-    selected_records: list[str]
+    schema_api_name: Optional[str] = ''
+    master_record: Optional[str] = ''
+    selected_records: Optional[list[str]] = []
+    master_id: Optional[str] = None
+    duplicate_ids: Optional[Union[str, list[str]]] = None
+    duplicate_id: Optional[str] = None
+    field_overrides: Optional[dict] = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_merge_fields(cls, values: Any) -> Any:
+        pass
 
 class Phone(BetterBaseModel):
     friendly_number: str = ''
@@ -410,6 +443,7 @@ class User(StandardBase):
     is_superuser: bool = False
     is_account_owner: bool = False
     is_account_admin: bool = False
+    is_first_user_onboarded: bool = False
     name: str = ''
     organization_id: str
     organization_name: str
@@ -444,9 +478,15 @@ class User(StandardBase):
     activation_code: Optional[str] = None
     email_addresses: Optional[List[str]] = []
     mfa_required: bool = True
+    hashed_password: Optional[str] = None
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
     is_portal_user: bool = False
     portal_id: Optional[str] = None
+    mfa_totp_secret: Optional[str] = None
+    mfa_totp_enabled: bool = False
+    mfa_backup_codes: Optional[List[str]] = Field(default_factory=list)
+    token_valid_after: Optional[datetime] = None
+    current_session_id: Optional[str] = None
 
 class UserCreate(User):
     id: PrefixedID = Field(default_factory=lambda: generate_base62_id('user'))
@@ -463,7 +503,11 @@ class Organization(OrganizationBase):
     company_hours: Optional[Availability] = Availability()
     settings: Optional[dict] = {}
     company_holidays: Optional[List[datetime]] = []
+    credits: float = Field(default=20.0, json_schema_extra={'system': True, 'title': 'Credits Balance ($)', 'type': 'number', 'format': 'currency', 'description': 'Available organization credit balance (1 credit = $1.00 USD)'})
+    credits_spent: float = Field(default=0.0, json_schema_extra={'system': True, 'title': 'Credits Spent ($)', 'type': 'number', 'format': 'currency', 'description': 'Lifetime credits spent on actions and compute'})
+    credits_currency: str = Field(default='USD', json_schema_extra={'system': True, 'title': 'Credits Currency', 'type': 'string'})
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
+    subscription: Optional[dict] = Field(default_factory=dict)
 
 class ObjectFieldPermissions(BaseModel):
     model_config = ConfigDict(extra='allow')
@@ -498,12 +542,24 @@ class StandardOwnership(StandardBase):
     owner: str = Field(default=None, json_schema_extra={'default': None, 'format': 'lookup', 'modify': False, 'schema': 'user', 'system': True, 'title': 'Owner', 'type': 'string', 'api_name': 'owner'})
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
 
+class Vault(StandardOwnership):
+    id: PrefixedID = Field(default_factory=lambda: generate_base62_id('vaul'))
+    name: str = ''
+    parent_vault: Optional[Union[PrefixedID, dict, str]] = None
+    computed_paths: Optional[List[str]] = Field(default_factory=list)
+    description: Optional[str] = None
+    icon: Optional[str] = None
+    color: Optional[str] = None
+    vaults: Optional[List[str]] = Field(default_factory=list)
+    vault_paths: Optional[List[str]] = Field(default_factory=list)
+    is_public: bool = Field(default=False, json_schema_extra={'api_name': 'is_public', 'title': 'Is Public', 'type': 'boolean', 'default': False, 'system': True, 'modify': True, 'custom': False})
+
 class File(StandardOwnership):
     id: PrefixedID = Field(default_factory=lambda: generate_base62_id('file'))
     location: str
     extension: str
     content_type: str
-    is_public: bool = False
+    is_public: bool = Field(default=False, json_schema_extra={'api_name': 'is_public', 'title': 'Is Public', 'type': 'boolean', 'default': False, 'system': True, 'modify': True, 'custom': False})
     link: Optional[str] = None
     file_size: Optional[int] = 0
     checksum: Optional[str] = None
@@ -538,6 +594,18 @@ class App(StandardBase):
     installed: bool = False
     marketplace: bool = False
     onboarded: bool = False
+    tagline: Optional[str] = ''
+    category: Optional[str] = 'productivity'
+    icon_url: Optional[str] = ''
+    banner_url: Optional[str] = ''
+    pricing_model: Optional[str] = 'included'
+    featured: Optional[bool] = False
+    publisher: Optional[str] = 'Valstorm Labs'
+    documentation_url: Optional[str] = ''
+    highlights: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    screenshots: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    prerequisites: Optional[List[str]] = Field(default_factory=list)
+    agent_setup_prompts: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
 
 class IntegratedApp(StandardBase):
@@ -576,10 +644,53 @@ class TwoFAResponse(BetterBaseModel):
     two_fa_required: bool = True
     email: str
     login_session_id: Optional[str] = None
+    mfa_methods: Optional[List[str]] = Field(default_factory=lambda: ['email'])
+    default_method: Optional[str] = 'email'
 
 class Verify2FAPayload(BetterBaseModel):
     email: str
     code: str
+    session_id: Optional[str] = None
+    method: Optional[str] = 'email'
+
+class MfaTotpSetupResponse(BetterBaseModel):
+    secret: str
+    otpauth_url: str
+    qr_code_data_uri: str
+
+class MfaTotpVerifyRequest(BetterBaseModel):
+    code: str
+
+class MfaTotpVerifyResponse(BetterBaseModel):
+    success: bool = True
+    message: str = 'TOTP two-factor authentication enabled successfully.'
+    backup_codes: List[str]
+
+class MfaDisableRequest(BetterBaseModel):
+    code: Optional[str] = None
+    password: Optional[str] = None
+
+class ActiveSessionItem(BetterBaseModel):
+    session_id: str
+    user_id: str
+    org_id: str
+    client_id: Optional[str] = None
+    device_name: Optional[str] = None
+    ip_address: Optional[str] = None
+    created_at: Optional[str] = None
+    last_active_at: Optional[str] = None
+    is_current: bool = False
+
+class ActiveSessionsResponse(BetterBaseModel):
+    sessions: List[ActiveSessionItem]
+
+class ExchangeTokenRequest(BetterBaseModel):
+    exchange_code: str
+
+class ExchangeTokenResponse(BetterBaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = 'bearer'
 
 class RefreshToken(BetterBaseModel):
     refresh_token: str
@@ -594,6 +705,8 @@ class OauthCodeInput(BetterBaseModel):
     client_id: str
     state: Optional[str] = None
     code_challenge: Optional[str] = None
+    redirect_uri: Optional[str] = None
+    scope: Optional[str] = None
 
 class CodeUrl(BetterBaseModel):
     code_url: str
@@ -614,6 +727,10 @@ class OauthAuthorizeInput(BetterBaseModel):
     state: Optional[str] = None
     scope: Optional[str] = None
     code_challenge: Optional[str] = None
+
+class GoogleDesktopLoginRequest(BetterBaseModel):
+    id_token: str
+    client_id: Optional[str] = 'desktop'
 
 class AcceptActivationInvite(BetterBaseModel):
     activation_code: str
@@ -677,12 +794,12 @@ class Notification(BetterBaseModel):
     modified_date: AwareDatetime = Field(default_factory=datetime.utcnow)
     created_by: Optional[PrefixedID] = None
     modified_by: Optional[PrefixedID] = None
-    name: str
-    channel: str
-    type: str
-    data: dict
-    read: bool = False
-    user: PrefixedID
+    name: str = ''
+    channel: Optional[str] = ''
+    type: str = 'dynamic'
+    data: Optional[dict] = Field(default_factory=dict)
+    read: Optional[bool] = False
+    user: Optional[PrefixedID] = None
     object: Optional[PrefixedID] = None
     record_id: Optional[str] = None
     body: Optional[str] = None
@@ -690,6 +807,17 @@ class Notification(BetterBaseModel):
     notification_setting: Optional[PrefixedID] = None
     notify: bool = True
     save: bool = True
+
+    @field_validator('read', mode='before')
+    @classmethod
+    def self_heal_read(cls, v):
+        """Self-heals null/None/missing read states from MongoDB to False boolean."""
+        pass
+
+    @field_validator('data', mode='before')
+    @classmethod
+    def self_heal_data(cls, v):
+        pass
 
 class WebNotificationData(BaseModel):
     title: str
@@ -970,6 +1098,11 @@ class SendGridEmailRequest(BaseModel):
     @field_validator('file_attachments', 'attachments', mode='before')
     @classmethod
     def convert_single_item_to_list(cls, v):
+        pass
+
+    @field_validator('campaign', 'campaign_contact', mode='before')
+    @classmethod
+    def convert_lookup_dict_to_id(cls, v):
         pass
 
 class TwilioSMS(BaseModel):

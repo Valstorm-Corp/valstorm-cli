@@ -16,7 +16,7 @@ import inspect
 from collections.abc import Callable
 from datetime import datetime, timezone
 from functools import partial
-from typing import Annotated, Any, Optional, Union
+from typing import Annotated, Any, Optional, Union, List, Dict
 from fastapi import Depends, Request
 from valstorm.auth import get_current_user
 from valstorm.dependencies import add_log
@@ -34,6 +34,7 @@ class BaseContext:
             platform (PlatformContext): The parent platform context.
         """
         pass
+from valstorm_platform.twilio_context import TwilioContext
 
 class RecordContext(BaseContext):
     """Context for record-related operations (CUD)."""
@@ -59,6 +60,18 @@ class RecordContext(BaseContext):
     async def calculate_rollup(self, record_id: str, api_name: str, rollup_field_api_name: str) -> float:
         """
         Dynamically calculate a rollup summary field for a specific record.
+        """
+        pass
+
+    async def hydrate_batch(self, ids: list[str]) -> dict:
+        """
+        Batch resolves prefixed IDs (e.g. ['cont_123', 'task_456']) into their display names and schemas.
+        """
+        pass
+
+    async def merge(self, master_id: str, duplicate_ids: Union[str, list[str]], schema_api_name: Optional[str]=None, field_overrides: Optional[dict]=None) -> Any:
+        """
+        Merge duplicate record(s) into master record and re-link related lookup references.
         """
         pass
 
@@ -110,6 +123,30 @@ class SchemaContext(BaseContext):
         """
         pass
 
+    async def create(self, data: dict, save: bool=True) -> Any:
+        """
+        Create a new custom object schema.
+        """
+        pass
+
+    async def create_field(self, field_data: dict, save: bool=True) -> Any:
+        """
+        Create a field in an existing schema.
+        """
+        pass
+
+    async def delete_field(self, object_id: str, field_name: str) -> Any:
+        """
+        Delete a field from a schema.
+        """
+        pass
+
+    async def delete(self, schema_id: str) -> Any:
+        """
+        Delete a custom schema.
+        """
+        pass
+
 class TaskContext(BaseContext):
     """Context for background task management."""
 
@@ -120,39 +157,47 @@ class TaskContext(BaseContext):
         pass
 
 class FileContext(BaseContext):
-    """Context for file operations (S3)."""
+    """Context for file operations (S3 and VFS)."""
 
-    async def upload(self, filename: str, body: Any, content_type: str='application/octet-stream', is_binary: bool=True, public: bool=False, **kwargs):
+    async def get_vfs_file(self, file_id: str) -> dict:
         """
-        Upload a file to storage.
+        Loads full file metadata and inline text content (if text/code < 10MB) or presigned URL.
         """
         pass
 
-    async def get_file(self, location: str):
+    async def browse_vault(self, vault_id: str='root', bypass_cache: bool=False) -> dict:
         """
-        Retrieves a file from S3 and returns its content.
-        Automatically scopes to the organization's folder.
-        """
-        pass
-
-    async def delete_s3(self, location: str):
-        """
-        Deletes a file from S3.
-        Automatically scopes to the organization's folder.
+        Inspects folder contents in a vault (child vaults and files).
         """
         pass
 
-    async def move_s3(self, source_location: str, destination_location: str, public: bool=False):
+    async def browse_path(self, string_path: str) -> dict:
         """
-        Moves a file in S3.
-        Automatically scopes both paths to the organization's folder.
+        Resolves human path (e.g. '/Finance/2026/') to vault contents.
         """
         pass
 
-    async def update_acl(self, location: str, public: bool):
+    async def get_tree(self, bypass_cache: bool=False) -> dict:
         """
-        Updates the ACL of an S3 file.
-        Automatically scopes to the organization's folder.
+        Returns full vault directory tree.
+        """
+        pass
+
+    async def get_snapshot(self) -> dict:
+        """
+        Returns full hierarchy snapshot of all vaults and files.
+        """
+        pass
+
+    async def move_item(self, item_id: str, to_vault_id: Optional[str]=None, from_vault_id: Optional[str]=None) -> dict:
+        """
+        Moves a file or vault to another vault.
+        """
+        pass
+
+    async def delete_vfs_item(self, item_id: str) -> dict:
+        """
+        Deletes a file or vault from VFS.
         """
         pass
 
@@ -161,45 +206,6 @@ class FileContext(BaseContext):
         """
         Returns the S3 bucket name.
         """
-        pass
-
-class TwilioContext(BaseContext):
-    """Sub-context for Twilio-specific operations."""
-
-    async def lookup(self, phone_number: str, **kwargs):
-        """
-        Perform a Twilio phone number lookup.
-        """
-        pass
-
-    async def delete_conversation(self, service_id: str, conversation_sid: str, **kwargs):
-        """
-        Delete a Twilio service conversation.
-        """
-        pass
-
-    async def application_cud(self, data: dict, method: str, **kwargs):
-        """
-        Create, update, or delete a Twilio application.
-        """
-        pass
-
-    async def _get_session(self, type: str='user', **kwargs):
-        """
-        Returns an authenticated Twilio session.
-        type: 'user' or 'phone'
-        """
-        pass
-
-    def get_callback(self, request: Request):
-        """
-        Wraps TwilioCallback.
-        """
-        pass
-
-    @property
-    def alerts(self):
-        """Twilio alert helpers."""
         pass
 
 class NotificationContext(BaseContext):
@@ -223,15 +229,31 @@ class CommunicationContext(BaseContext):
     def __init__(self, platform: 'PlatformContext'):
         pass
 
-    async def send_sms(self, to_phone: str, message: str, **kwargs):
+    async def send_sms(self, to_phone: Optional[str]=None, message: str='', **kwargs):
         """
-        Send an SMS message via Twilio.
+        Send an SMS message via Twilio. Delegates to TwilioContext.
         """
         pass
 
-    async def send_email(self, request: Union[Any, dict], async_run: bool=True, **kwargs):
+    async def send_gmail(self, request: Union[Any, dict], **kwargs):
         """
-        Send an email via SendGrid.
+        Send an email via Google Workspace / Gmail (DwD / Rep mailbox).
+        """
+        pass
+
+    async def send_microsoft_email(self, request: Union[Any, dict], **kwargs):
+        """
+        Send an email via Microsoft 365 / Outlook (Graph API / Rep mailbox).
+        """
+        pass
+
+    async def send_outlook(self, request: Union[Any, dict], **kwargs):
+        """Alias for send_microsoft_email."""
+        pass
+
+    async def send_email(self, request: Union[Any, dict], provider: str='sendgrid', async_run: bool=True, **kwargs):
+        """
+        Send an email via specified provider ('sendgrid', 'gmail', or 'outlook').
         """
         pass
 
@@ -285,67 +307,7 @@ class SalesforceContext(BaseContext):
         Update record(s) in Salesforce.
         """
         pass
-
-class GoogleContext(BaseContext):
-    """Context for Google Workspace operations."""
-
-    async def _get_workspace(self, **kwargs):
-        """
-        Returns an initialized GoogleWorkspaceService instance.
-        """
-        pass
-
-    async def fetch_drive_files_concurrently(self, file_ids: list[str]):
-        """
-        Concurrently fetches file metadata for multiple IDs.
-        """
-        pass
-
-    async def export_drive_file(self, file_id: str, mime_type: str, base64_encode: bool=True, **kwargs):
-        pass
-
-    async def move_drive_file(self, file_id: str, target_folder_id: str):
-        """
-        Moves a Google Drive file to a new target folder.
-        """
-        pass
-
-    async def create_drive_folder(self, name: str, parent_id: str=None):
-        """
-        Creates a new Google Drive folder.
-        """
-        pass
-
-    async def upload_drive_file(self, file_name: str, file_content: bytes, mime_type: str, parent_id: str=None):
-        """
-        Uploads a file to Google Drive.
-        """
-        pass
-
-    async def get_drive_file_content(self, file_id: str):
-        """
-        Returns the content of a Google Drive file.
-        Automatically handles exporting Google Workspace documents to text/plain.
-        """
-        pass
-
-    async def modify_gmail_labels(self, message_id: str, add_label_ids: list[str]=None, remove_label_ids: list[str]=None):
-        """
-        Modifies the labels on the specified Gmail message.
-        """
-        pass
-
-    async def modify_gmail_thread_labels(self, thread_id: str, add_label_ids: list[str]=None, remove_label_ids: list[str]=None):
-        """
-        Modifies the labels on the specified Gmail thread.
-        """
-        pass
-
-    async def send_email(self, data: Union[dict, Any], **kwargs):
-        """
-        Sends an email using standard Gmail integration, routing automatically.
-        """
-        pass
+from valstorm_platform.google_context import GoogleContext
 
 class AgentContext(BaseContext):
     """Context for inter-agent communication."""
@@ -361,6 +323,8 @@ class AgentContext(BaseContext):
         pass
 from .stripe_context import StripeContext
 from valstorm_platform.microsoft_context import MicrosoftContext
+from valstorm_platform.slack_context import SlackContext
+from valstorm_platform.scraper_context import ScraperContext
 
 class IntegrationContext(BaseContext):
     """Context grouping all external integrations."""

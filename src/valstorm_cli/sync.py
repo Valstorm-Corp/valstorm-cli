@@ -7,6 +7,7 @@ import httpx
 from .auth import get_auth, get_api_base_url, get_project_root, requires_auth, ValstormAuth
 from .scaffold import prepare_web_push
 from .project import update_local_stubs
+from .record import unpack_hydrated_lookups
 
 console = Console()
 pull_app = typer.Typer(help="Download assets from the Valstorm cloud.")
@@ -111,7 +112,7 @@ def pull(
         elif file_name:
             query += f" WHERE file_name = '{file_name}'"
         
-        response = client.post("/query", json={"query": query})
+        response = client.post("/query", json={"query": query, "hydrate": False})
         
         if response.status_code != 200:
             console.print(f"[bold red]Fetch failed for {file_type}:[/bold red] {response.status_code}")
@@ -372,6 +373,7 @@ def push(
         
         # 1. Handle Creates
         if creates_payload:
+            creates_payload = unpack_hydrated_lookups(creates_payload)
             console.print(f"Creating {len(creates_payload)} new [cyan]{file_type}[/cyan]s on [blue]{get_api_base_url(auth.env)}[/blue]...")
             response = client.post(f"/object/{file_type}", json=creates_payload)
             if response.status_code in [200, 201]:
@@ -384,6 +386,7 @@ def push(
 
         # 2. Handle Updates
         if updates_payload:
+            updates_payload = unpack_hydrated_lookups(updates_payload)
             console.print(f"Pushing {len(updates_payload)} updates for [cyan]{file_type}[/cyan] to [blue]{get_api_base_url(auth.env)}[/blue]...")
             response = client.patch(f"/object/{file_type}", json=updates_payload)
             if response.status_code in [200, 204]:

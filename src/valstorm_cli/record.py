@@ -8,19 +8,36 @@ from .auth import ValstormAuth, requires_auth
 console = Console()
 record_app = typer.Typer(help="Manage records", no_args_is_help=True)
 
+LOOKUP_SUMMARY_KEYS = {"id", "name", "label", "schema", "schema_api_name", "schema_title", "_id"}
+
+def unpack_hydrated_lookups(data):
+    """
+    Recursively unpacks hydrated lookup dictionaries {'id': '...'} into raw ID strings.
+    Leaves non-lookup dictionaries intact.
+    """
+    if isinstance(data, dict):
+        if "id" in data and isinstance(data["id"], str) and set(data.keys()).issubset(LOOKUP_SUMMARY_KEYS):
+            return data["id"]
+        return {k: unpack_hydrated_lookups(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [unpack_hydrated_lookups(item) for item in data]
+    return data
+
 def load_data(data: Optional[str], file: Optional[str]) -> List[dict]:
     if file:
         try:
             with open(file, 'r') as f:
                 content = json.load(f)
-                return content if isinstance(content, list) else [content]
+                loaded = content if isinstance(content, list) else [content]
+                return unpack_hydrated_lookups(loaded)
         except Exception as e:
             console.print(f"[bold red]Failed to read file:[/bold red] {e}")
             raise typer.Exit(1)
     elif data:
         try:
             content = json.loads(data)
-            return content if isinstance(content, list) else [content]
+            loaded = content if isinstance(content, list) else [content]
+            return unpack_hydrated_lookups(loaded)
         except Exception as e:
             console.print(f"[bold red]Failed to parse data JSON:[/bold red] {e}")
             raise typer.Exit(1)

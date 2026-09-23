@@ -154,9 +154,39 @@ class ValstormAuth:
         self.organization_name = None
         self.default_app_id = None
         
-        if self.auth_file.exists():
+        target_file = self.auth_file
+        # If target file doesn't exist, search candidate fallbacks so the user is never stranded
+        if not target_file.exists():
+            auth_dir = Path.home() / ".valstorm"
+            fallback_candidates = [
+                auth_dir / f"auth_{self.env}_default.json",
+                auth_dir / f"auth_{self.env}.json",
+                auth_dir / "auth_prod_default.json",
+                auth_dir / "auth_prod.json",
+                auth_dir / "auth.json",
+            ]
+            if auth_dir.exists():
+                for extra in sorted(auth_dir.glob("auth_*.json")):
+                    if extra not in fallback_candidates:
+                        fallback_candidates.append(extra)
+
+            for candidate in fallback_candidates:
+                if candidate.exists() and candidate.is_file():
+                    try:
+                        check_content = json.loads(candidate.read_text().strip())
+                        if check_content.get("access_token"):
+                            target_file = candidate
+                            parts = candidate.stem.split("_")
+                            if len(parts) >= 2 and parts[1] in ENVIRONMENTS:
+                                self.env = parts[1]
+                                self.profile = "_".join(parts[2:]) if len(parts) >= 3 else "default"
+                            break
+                    except Exception:
+                        continue
+
+        if target_file.exists():
             try:
-                content = self.auth_file.read_text().strip()
+                content = target_file.read_text().strip()
                 if not content:
                     return
                 data = json.loads(content)
