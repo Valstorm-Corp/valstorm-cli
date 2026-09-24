@@ -481,10 +481,17 @@ def version():
     """
     Display the Valstorm CLI version from the package metadata.
     """
-    data = open(Path(__file__).parent.parent.parent / "pyproject.toml", "r").read()
-    version_line = next((line for line in data.splitlines() if line.strip().startswith("version =")), None)
-    version = version_line.split("=")[1].strip().strip('"') if version_line else "Unknown"
-    console.print(f"Valstorm CLI version: [bold cyan]{version}[/bold cyan]")
+    try:
+        from importlib.metadata import version as get_pkg_version
+        ver = get_pkg_version("valstorm-cli")
+    except Exception:
+        try:
+            data = open(Path(__file__).parent.parent.parent / "pyproject.toml", "r").read()
+            version_line = next((line for line in data.splitlines() if line.strip().startswith("version =")), None)
+            ver = version_line.split("=")[1].strip().strip('"') if version_line else "Unknown"
+        except Exception:
+            ver = "Unknown"
+    console.print(f"Valstorm CLI version: [bold cyan]{ver}[/bold cyan]")
 
 @mcp_app.command(name="start")
 def mcp_start():

@@ -69,8 +69,10 @@ def list_profiles():
         return
         
     found = []
+    seen = set()
     # auth files are usually named auth_{env}_{profile}.json or auth_{env}.json
-    for path in auth_dir.glob("auth_*.json"):
+    # Sort files so auth_{env}_{profile}.json is processed before legacy auth_{env}.json
+    for path in sorted(auth_dir.glob("auth_*.json"), key=lambda p: (len(p.stem.split("_")), p.name), reverse=True):
         name_parts = path.stem.split("_")
         env = "prod"
         profile = "default"
@@ -82,6 +84,11 @@ def list_profiles():
             # auth_{env}_{profile}.json
             env = name_parts[1]
             profile = "_".join(name_parts[2:])
+            
+        key = (env, profile)
+        if key in seen:
+            continue
+        seen.add(key)
             
         try:
             content = path.read_text().strip()
@@ -353,12 +360,13 @@ def login(
             if load_res.status_code == 200:
                 user_data = load_res.json()
                 user = user_data.get("user", user_data) # handle both nested and unnested responses
-                if user.get("organization_name"):
-                    auth.save_tokens(
-                        access_token=data["access_token"],
-                        refresh_token=data.get("refresh_token"),
-                        organization_name=user.get("organization_name")
-                    )
+                org_name = user.get("organization_name") if isinstance(user, dict) else None
+                auth.save_tokens(
+                    access_token=data["access_token"],
+                    refresh_token=data.get("refresh_token"),
+                    organization_name=org_name,
+                    user=user if isinstance(user, dict) else None
+                )
                     
         console.print("[bold green]Successfully logged in![/bold green]")
     else:

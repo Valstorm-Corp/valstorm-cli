@@ -101,6 +101,10 @@ def get_auth_file(env: str, profile: str) -> Path:
         legacy_path = auth_dir / f"auth_{env}.json"
         if legacy_path.exists():
             return legacy_path
+        if env == "prod":
+            root_auth = auth_dir / "auth.json"
+            if root_auth.exists():
+                return root_auth
             
     # 3. Default to the new pattern for new files
     return new_path
@@ -141,6 +145,7 @@ class ValstormAuth:
         self.refresh_token = None
         self.organization_name = None
         self.default_app_id = None
+        self.user = None
         self._load_tokens()
 
     @property
@@ -153,37 +158,9 @@ class ValstormAuth:
         self.refresh_token = None
         self.organization_name = None
         self.default_app_id = None
+        self.user = None
         
         target_file = self.auth_file
-        # If target file doesn't exist, search candidate fallbacks so the user is never stranded
-        if not target_file.exists():
-            auth_dir = Path.home() / ".valstorm"
-            fallback_candidates = [
-                auth_dir / f"auth_{self.env}_default.json",
-                auth_dir / f"auth_{self.env}.json",
-                auth_dir / "auth_prod_default.json",
-                auth_dir / "auth_prod.json",
-                auth_dir / "auth.json",
-            ]
-            if auth_dir.exists():
-                for extra in sorted(auth_dir.glob("auth_*.json")):
-                    if extra not in fallback_candidates:
-                        fallback_candidates.append(extra)
-
-            for candidate in fallback_candidates:
-                if candidate.exists() and candidate.is_file():
-                    try:
-                        check_content = json.loads(candidate.read_text().strip())
-                        if check_content.get("access_token"):
-                            target_file = candidate
-                            parts = candidate.stem.split("_")
-                            if len(parts) >= 2 and parts[1] in ENVIRONMENTS:
-                                self.env = parts[1]
-                                self.profile = "_".join(parts[2:]) if len(parts) >= 3 else "default"
-                            break
-                    except Exception:
-                        continue
-
         if target_file.exists():
             try:
                 content = target_file.read_text().strip()
@@ -194,13 +171,14 @@ class ValstormAuth:
                 self.refresh_token = data.get("refresh_token")
                 self.organization_name = data.get("organization_name")
                 self.default_app_id = data.get("default_app_id")
+                self.user = data.get("user")
 
             except (json.JSONDecodeError, Exception):
                 # If file is corrupted or unreadable, we ignore it 
                 # so ensure_valid_token will return False and trigger a re-login
                 pass
 
-    def save_tokens(self, access_token: str, refresh_token: str = None, organization_name: str = None, default_app_id: str = None):
+    def save_tokens(self, access_token: str, refresh_token: str = None, organization_name: str = None, default_app_id: str = None, user: dict = None):
         if access_token:
             self.access_token = access_token
         if refresh_token is not None:
@@ -209,15 +187,23 @@ class ValstormAuth:
             self.organization_name = organization_name
         if default_app_id is not None:
             self.default_app_id = default_app_id
+        if user is not None:
+            self.user = user
             
         try:
             self.auth_file.parent.mkdir(parents=True, exist_ok=True)
-            data = {
-                "access_token": self.access_token,
-                "refresh_token": self.refresh_token,
-                "organization_name": self.organization_name,
-                "default_app_id": self.default_app_id
-            }
+            data = {}
+            if self.auth_file.exists():
+                try:
+                    data = json.loads(self.auth_file.read_text())
+                except Exception:
+                    pass
+            data["access_token"] = self.access_token
+            data["refresh_token"] = self.refresh_token
+            data["organization_name"] = self.organization_name
+            data["default_app_id"] = self.default_app_id
+            if self.user is not None:
+                data["user"] = self.user
 
             # Write to a temporary file first then rename to ensure atomicity
             temp_file = self.auth_file.with_suffix(".tmp")
@@ -393,8 +379,9 @@ class ValstormAuth:
                 if response.status_code == 200:
                     user_data = response.json()
                     user = user_data.get("user", user_data)
-                    if user.get("organization_name"):
-                        self.save_tokens(access_token=self.access_token, organization_name=user.get("organization_name"))
+                    org_name = user.get("organization_name") if isinstance(user, dict) else None
+                    if org_name or isinstance(user, dict):
+                        self.save_tokens(access_token=self.access_token, organization_name=org_name, user=user if isinstance(user, dict) else None)
                     
                     ValstormAuth._validation_cache[cache_key] = True
                     console.print(f"[green]Token for profile '{self.profile}' in environment '{self.env}' is valid.[/green]")
