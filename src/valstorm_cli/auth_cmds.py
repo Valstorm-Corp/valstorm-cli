@@ -198,7 +198,8 @@ def login(
     profile: str = typer.Option(None, "--profile", "-p", help="Profile name to save these credentials under."),
     env: str = typer.Option(None, "--env", "-e", help="Target environment (local, dev, prod)."),
     use_password: bool = typer.Option(False, "--password", help="Use legacy password flow."),
-    pat: str = typer.Option(None, "--pat", help="Login using a Personal Access Token (PAT).")
+    pat: str = typer.Option(None, "--pat", help="Login using a Personal Access Token (PAT)."),
+    refresh_token: Optional[str] = typer.Option(None, "--refresh-token", "-r", help="Optional refresh token to save alongside access token.")
 ):
     """
     Authenticate with Valstorm.
@@ -207,22 +208,26 @@ def login(
     
     console.print(f"Logging in to [blue]{get_api_base_url(auth.env)}[/blue] (Profile: [cyan]{auth.profile}[/cyan])")
 
-    if method == "pat" and key:
+    if method in ("pat", "token", "tokens") and key:
         pat = key
-    elif method == "pat" and not key:
-        console.print("[bold red]Error: You must provide a token when using 'pat' method. Usage: valstorm login pat <key>[/bold red]")
+    elif method in ("pat", "token", "tokens") and not key:
+        console.print("[bold red]Error: You must provide a token when using this method. Usage: valstorm login pat <key> [--refresh-token <refresh_token>][/bold red]")
         raise typer.Exit(1)
     elif method:
         console.print(f"[bold red]Unknown login method: {method}[/bold red]")
         raise typer.Exit(1)
 
     if pat:
-        auth.save_tokens(access_token=pat, refresh_token="") # empty string wipes the old refresh token
+        # Preserve existing refresh token if not explicitly provided and token is an OAuth JWT
+        saved_refresh = refresh_token
+        if not saved_refresh and pat.startswith("eyJ"):
+            saved_refresh = auth.refresh_token or None
+        auth.save_tokens(access_token=pat, refresh_token=saved_refresh)
         if auth.ensure_valid_token():
-            console.print(f"[bold green]Successfully logged in using PAT for profile '{auth.profile}'.[/bold green]")
+            console.print(f"[bold green]Successfully logged in using token for profile '{auth.profile}'.[/bold green]")
             return
         else:
-            console.print("[bold red]Invalid Personal Access Token.[/bold red]")
+            console.print("[bold red]Invalid authentication token.[/bold red]")
             raise typer.Exit(1)
     
     if use_password:
@@ -329,7 +334,7 @@ def login(
                     console.print("[bold red]Error:[/bold red] State mismatch. Authentication failed.")
                     raise typer.Exit(1)
                 
-                # 3. Exchange code for tokens
+                # 4. Exchange code for tokens
                 response = client.post("/oauth2/token", json={
                     "grant_type": "authorization_code",
                     "client_id": client_id,

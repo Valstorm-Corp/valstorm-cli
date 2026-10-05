@@ -27,6 +27,37 @@ def decode_jwt_payload(token: str) -> dict:
     except Exception:
         return {}
 
+
+def is_jwt_expired(token: str, margin_seconds: int = 60) -> bool:
+    """Returns True if the JWT token is expired or within margin_seconds of expiring."""
+    if not token or not str(token).startswith("eyJ"):
+        return False
+    try:
+        payload = decode_jwt_payload(token)
+        if "exp" not in payload:
+            return False
+        import time
+        return time.time() >= (float(payload["exp"]) - margin_seconds)
+    except Exception:
+        return False
+
+
+def get_desktop_token_paths() -> list:
+    """Discovers local Desktop App token files across macOS, Linux, and Windows."""
+    paths = [
+        Path.home() / "Library/Application Support/com.valstorm.app/tokens.json",
+        Path.home() / "Library/Application Support/com.valstorm.app/tokens_dev.json",
+        Path.home() / ".config/com.valstorm.app/tokens.json",
+        Path.home() / ".config/com.valstorm.app/tokens_dev.json",
+    ]
+    app_data = os.environ.get("APPDATA")
+    if app_data:
+        paths.extend([
+            Path(app_data) / "com.valstorm.app/tokens.json",
+            Path(app_data) / "com.valstorm.app/tokens_dev.json",
+        ])
+    return [p for p in paths if p.exists()]
+
 # Configuration
 ENVIRONMENTS = {
     "prod": "https://api.valstorm.com",
@@ -119,6 +150,10 @@ class ValstormHTTPAuth(httpx.Auth):
         self.auth_manager = auth_manager
 
     def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        # Proactively refresh token if expired before sending
+        if self.auth_manager.access_token and is_jwt_expired(self.auth_manager.access_token):
+            self.auth_manager.refresh_auth()
+
         token = self.auth_manager.access_token
         if token:
             request.headers["Authorization"] = f"Bearer {token}"
@@ -178,11 +213,31 @@ class ValstormAuth:
                 # so ensure_valid_token will return False and trigger a re-login
                 pass
 
+        # Fallback to desktop app tokens if no active token or token is expired without refresh_token
+        if (not self.access_token or (is_jwt_expired(self.access_token) and not self.refresh_token)) and self.env == "prod":
+            for d_path in get_desktop_token_paths():
+                try:
+                    d_content = json.loads(d_path.read_text())
+                    d_acc = d_content.get("accessToken") or d_content.get("access_token")
+                    d_ref = d_content.get("refreshToken") or d_content.get("refresh_token")
+                    if d_acc:
+                        self.access_token = d_acc
+                        self.refresh_token = d_ref
+                        # Proactively save so ~/.valstorm has the valid credentials
+                        self.save_tokens(access_token=d_acc, refresh_token=d_ref)
+                        break
+                except Exception:
+                    pass
+
     def save_tokens(self, access_token: str, refresh_token: str = None, organization_name: str = None, default_app_id: str = None, user: dict = None):
         if access_token:
             self.access_token = access_token
         if refresh_token is not None:
-            self.refresh_token = refresh_token
+            # Preserve existing refresh token if empty string passed but we already have a valid one
+            if refresh_token == "" and self.refresh_token:
+                pass
+            else:
+                self.refresh_token = refresh_token
         if organization_name is not None:
             self.organization_name = organization_name
         if default_app_id is not None:

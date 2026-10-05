@@ -222,6 +222,7 @@ class ChatRequest(BetterBaseModel):
     ui_context: Optional[str] = None
     execution_environment: Optional[str] = None
     device: Optional[str] = None
+    vsagent_api_key: Optional[str] = None
     hermes_api_key: Optional[str] = None
     session_id: Optional[str] = None
     provider: Optional[str] = None
@@ -244,6 +245,7 @@ class DesktopSyncRequest(BetterBaseModel):
     session_id: Optional[str] = None
     input_tokens: Annotated[int, Field(default=0, strict=True, ge=0, le=9007199254740991)] = 0
     output_tokens: Annotated[int, Field(default=0, strict=True, ge=0, le=9007199254740991)] = 0
+    cached_input_tokens: Annotated[int, Field(default=0, strict=True, ge=0, le=9007199254740991)] = 0
     model: Optional[str] = None
     provider: Optional[str] = None
     error: Optional[str] = Field(default=None, max_length=4096)
@@ -272,6 +274,7 @@ class TaskOrchestrationRequest(BetterBaseModel):
     execution_environment: Optional[str] = 'cloud'
     device: Optional[str] = None
     device_id: Optional[str] = None
+    vsagent_api_key: Optional[str] = None
     hermes_api_key: Optional[str] = None
     provider: Optional[str] = None
 
@@ -508,6 +511,9 @@ class Organization(OrganizationBase):
     credits_currency: str = Field(default='USD', json_schema_extra={'system': True, 'title': 'Credits Currency', 'type': 'string'})
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
     subscription: Optional[dict] = Field(default_factory=dict)
+    publishable_key: Optional[str] = Field(default=None, json_schema_extra={'system': True, 'title': 'Publishable Key', 'type': 'string', 'description': 'Public API key for inbound form and webhook ingestion (pk_live_...)'})
+    allowed_inbound_origins: Optional[List[str]] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Allowed Inbound Origins', 'type': 'list', 'description': 'Whitelisted website domains allowed to submit public inbound forms'})
+    inbound_form_settings: Optional[dict] = Field(default_factory=dict, json_schema_extra={'system': True, 'title': 'Inbound Form Settings', 'type': 'json', 'description': 'Configuration options for inbound public forms and webhooks'})
 
 class ObjectFieldPermissions(BaseModel):
     model_config = ConfigDict(extra='allow')

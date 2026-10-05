@@ -4,7 +4,15 @@ A local command-line interface for Valstorm developers.
 
 ## Prerequisites
 
-- [uv](https://github.com/astral-sh/uv) installed on your machine.
+- [uv](https://github.com/astral-sh/uv) installed on your machine (`curl -LsSf https://astral.sh/uv/install.sh | sh`).
+- Ensure `$HOME/.local/bin` is added to your `PATH` (executables installed via `uv tool` reside in `~/.local/bin`):
+  ```bash
+  # For zsh (default on macOS):
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+
+  # For bash:
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+  ```
 
 ## Usage
 
