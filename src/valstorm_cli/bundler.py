@@ -18,6 +18,8 @@ def bundle_local_app(app_config_path: Path, workspace_root: Path) -> Dict[str, A
         "id": app_id,
         "name": app_config.get("name", "Unnamed App"),
         "description": app_config.get("description", ""),
+        "owner": app_config.get("owner") or "Valstorm",
+        "version": app_config.get("version", "1.0.0"),
         "schemas": [],
         "records": {}
     }
