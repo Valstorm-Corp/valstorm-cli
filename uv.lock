@@ -763,6 +763,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "rich" },
     { name = "typer" },
+    { name = "valstorm-client" },
     { name = "valstorm-mcp" },
 ]
 
@@ -772,7 +773,35 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "typer", specifier = ">=0.12.0" },
+    { name = "valstorm-client", editable = "../packages/client-python" },
     { name = "valstorm-mcp", git = "https://github.com/Valstorm-Corp/valstorm-mcp.git" },
+]
+
+[[package]]
+name = "valstorm-client"
+version = "0.1.2"
+source = { editable = "../packages/client-python" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "pydantic", specifier = ">=2.10.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "bandit", specifier = ">=1.8.0" },
+    { name = "mypy", specifier = ">=1.14.0" },
+    { name = "pip-audit", specifier = ">=2.8.0" },
+    { name = "pip-licenses", specifier = ">=5.0.0" },
+    { name = "pytest", specifier = ">=8.3.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "respx", specifier = ">=0.21.0" },
+    { name = "ruff", specifier = ">=0.9.0" },
 ]
 
 [[package]]

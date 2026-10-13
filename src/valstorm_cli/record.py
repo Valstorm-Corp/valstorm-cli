@@ -1,8 +1,8 @@
 import typer
-import httpx
 import json
 from typing import Optional, List
 from rich.console import Console
+from valstorm import ValstormClient, ValstormError
 from .auth import ValstormAuth, requires_auth
 
 console = Console()
@@ -53,16 +53,17 @@ def create_record(
     file: Optional[str] = typer.Option(None, "--file", help="JSON file containing record data."),
     profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
     env: str = typer.Option(None, "--env", "-e", help="Target environment."),
-    client: httpx.Client = None  # type: ignore
+    sdk: ValstormClient = None  # type: ignore
 ):
     """Create one or multiple records."""
     payload = load_data(data, file)
-    res = client.post(f"/object/{schema_api_name}", json=payload)
-    if res.status_code not in (200, 201):
-        console.print(f"[bold red]Failed to create record(s):[/bold red] {res.text}")
+    try:
+        created = sdk.records.create(schema_api_name, payload)
+        console.print("[green]✓ Successfully created record(s).[/green]")
+        console.print_json(data=created)
+    except ValstormError as e:
+        console.print(f"[bold red]Failed to create record(s):[/bold red] {e}")
         raise typer.Exit(1)
-    console.print("[green]✓ Successfully created record(s).[/green]")
-    console.print_json(data=res.json())
 
 @record_app.command(name="update")
 @requires_auth
@@ -72,16 +73,17 @@ def update_record(
     file: Optional[str] = typer.Option(None, "--file", help="JSON file containing update data."),
     profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
     env: str = typer.Option(None, "--env", "-e", help="Target environment."),
-    client: httpx.Client = None  # type: ignore
+    sdk: ValstormClient = None  # type: ignore
 ):
     """Update existing records."""
     payload = load_data(data, file)
-    res = client.patch(f"/object/{schema_api_name}", json=payload)
-    if res.status_code != 200:
-        console.print(f"[bold red]Failed to update record(s):[/bold red] {res.text}")
+    try:
+        updated = sdk.records.update(schema_api_name, payload)
+        console.print("[green]✓ Successfully updated record(s).[/green]")
+        console.print_json(data=updated)
+    except ValstormError as e:
+        console.print(f"[bold red]Failed to update record(s):[/bold red] {e}")
         raise typer.Exit(1)
-    console.print("[green]✓ Successfully updated record(s).[/green]")
-    console.print_json(data=res.json())
 
 @record_app.command(name="delete")
 @requires_auth
@@ -91,7 +93,7 @@ def delete_record(
     file: Optional[str] = typer.Option(None, "--file", help="JSON file containing array of IDs."),
     profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
     env: str = typer.Option(None, "--env", "-e", help="Target environment."),
-    client: httpx.Client = None  # type: ignore
+    sdk: ValstormClient = None  # type: ignore
 ):
     """Delete records."""
     ids_to_delete = []
@@ -109,8 +111,9 @@ def delete_record(
         console.print("[bold red]Must provide either --id or --file.[/bold red]")
         raise typer.Exit(1)
 
-    res = client.request("DELETE", f"/object/{schema_api_name}", params={"ids": ids_to_delete})
-    if res.status_code != 200:
-        console.print(f"[bold red]Failed to delete record(s):[/bold red] {res.text}")
+    try:
+        deleted_count = sdk.records.delete(schema_api_name, ids_to_delete)
+        console.print(f"[green]✓ Successfully deleted {deleted_count} record(s).[/green]")
+    except ValstormError as e:
+        console.print(f"[bold red]Failed to delete record(s):[/bold red] {e}")
         raise typer.Exit(1)
-    console.print(f"[green]✓ Successfully deleted {len(ids_to_delete)} record(s).[/green]")

@@ -1,11 +1,11 @@
 import typer
-import httpx
 import json
 import csv
 from typing import Optional
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table
+from valstorm import ValstormClient, ValstormError
 from .auth import ValstormAuth, requires_auth
 
 console = Console()
@@ -99,7 +99,7 @@ def sql(
     bypass_cache: bool = typer.Option(False, "--bypass-cache", help="Bypass the query cache."),
     save: Optional[str] = typer.Option(None, "--save", "-s", help="Save results to a JSON file."),
     csv_file: Optional[str] = typer.Option(None, "--csv", help="Save results to a CSV file."),
-    client: httpx.Client = None  # type: ignore
+    sdk: ValstormClient = None  # type: ignore
 ):
     """Execute a SQL-like query against the Valstorm API."""
     query_str = get_query_string(query, file)
@@ -107,17 +107,12 @@ def sql(
     if save_query:
         save_query_to_file(query_str, save_query)
         
-    response = client.post("/query", json={
-        "query": query_str,
-        "bypass_cache": bypass_cache
-    })
-    
-    if response.status_code != 200:
-        console.print(f"[bold red]Query failed ({response.status_code}):[/bold red] {response.text}")
+    try:
+        data = sdk.query.sql(query=query_str, bypass_cache=bypass_cache)
+        handle_query_save_and_output(data, output, save, csv_file)
+    except ValstormError as e:
+        console.print(f"[bold red]Query failed:[/bold red] {e}")
         raise typer.Exit(1)
-        
-    data = response.json()
-    handle_query_save_and_output(data, output, save, csv_file)
 
 @query_app.command(name="graphql")
 @requires_auth
@@ -130,7 +125,7 @@ def graphql(
     output: str = typer.Option("json", "--output", "-o", help="Output format (table, json)."),
     save: Optional[str] = typer.Option(None, "--save", "-s", help="Save results to a JSON file."),
     csv_file: Optional[str] = typer.Option(None, "--csv", help="Save results to a CSV file."),
-    client: httpx.Client = None  # type: ignore
+    sdk: ValstormClient = None  # type: ignore
 ):
     """Execute a GraphQL query against the Valstorm API."""
     query_str = get_query_string(query, file)
@@ -138,13 +133,9 @@ def graphql(
     if save_query:
         save_query_to_file(query_str, save_query)
         
-    response = client.post("/graphql", json={
-        "query": query_str
-    })
-    
-    if response.status_code != 200:
-        console.print(f"[bold red]GraphQL Query failed ({response.status_code}):[/bold red] {response.text}")
+    try:
+        data = sdk.query.graphql(query=query_str)
+        handle_query_save_and_output(data, output, save, csv_file)
+    except ValstormError as e:
+        console.print(f"[bold red]GraphQL Query failed:[/bold red] {e}")
         raise typer.Exit(1)
-        
-    data = response.json()
-    handle_query_save_and_output(data, output, save, csv_file)

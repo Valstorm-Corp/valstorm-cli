@@ -278,6 +278,26 @@ class ValstormAuth:
             timeout=timeout
         )
 
+    def get_sdk_client(self, **kwargs):
+        """Returns a ValstormClient from valstorm SDK equipped with automatic token refresh."""
+        from valstorm import ValstormClient, UserJwtAuth, PatAuth
+        base_url = get_api_base_url(self.env)
+        timeout = kwargs.get("timeout", 30.0)
+
+        if self.access_token and self.access_token.startswith("vst_pat_"):
+            auth = PatAuth(self.access_token)
+        else:
+            auth = UserJwtAuth(
+                access_token=self.access_token or "",
+                refresh_token=self.refresh_token,
+                on_refresh=lambda new_acc, new_ref: self.save_tokens(access_token=new_acc, refresh_token=new_ref),
+            )
+        return ValstormClient(
+            base_url=base_url,
+            auth=auth,
+            timeout=timeout,
+        )
+
     def refresh_auth(self) -> bool:
         if not self.refresh_token:
             return False
@@ -503,7 +523,7 @@ def requires_auth(func=None, *, use_parent: bool = False):
     """
     def decorator(f):
         sig = inspect.signature(f)
-        params = [p for name, p in sig.parameters.items() if name not in ('client', 'auth')]
+        params = [p for name, p in sig.parameters.items() if name not in ('client', 'auth', 'sdk')]
         new_sig = sig.replace(parameters=params)
         
         @functools.wraps(f)
@@ -521,11 +541,16 @@ def requires_auth(func=None, *, use_parent: bool = False):
                 console.print("[bold red]Not logged in.[/bold red] Please run `valstorm login`.")
                 raise typer.Exit(1)
                 
-            client = auth_manager.get_client()
+            client = None
+            sdk = None
             
             try:
                 if 'client' in sig.parameters and 'client' not in kwargs:
+                    client = auth_manager.get_client()
                     kwargs['client'] = client
+                if 'sdk' in sig.parameters and 'sdk' not in kwargs:
+                    sdk = auth_manager.get_sdk_client()
+                    kwargs['sdk'] = sdk
                 if 'auth' in sig.parameters and 'auth' not in kwargs:
                     kwargs['auth'] = auth_manager
                     
@@ -534,7 +559,10 @@ def requires_auth(func=None, *, use_parent: bool = False):
                 console.print(f"[bold red]Connection Error:[/bold red] {e}")
                 raise typer.Exit(1)
             finally:
-                client.close()
+                if client is not None:
+                    client.close()
+                if sdk is not None:
+                    sdk.close()
                 
         wrapper.__signature__ = new_sig  # type: ignore
         return wrapper

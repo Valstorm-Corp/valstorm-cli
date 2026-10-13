@@ -201,6 +201,24 @@ class FileContext(BaseContext):
         """
         pass
 
+    async def update_acl(self, location: str, public: bool=False) -> dict:
+        """
+        Updates the ACL of an S3 object (public-read or private).
+        """
+        pass
+
+    async def move_s3(self, source_key: str, dest_key: str, public: bool=False) -> dict:
+        """
+        Moves an S3 object from source_key to dest_key with appropriate ACL.
+        """
+        pass
+
+    async def delete_s3(self, location: str) -> dict:
+        """
+        Deletes an S3 object at location.
+        """
+        pass
+
     @property
     def s3_bucket_name(self):
         """

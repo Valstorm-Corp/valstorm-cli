@@ -1,1 +1,0 @@
-SELECT * FROM ticket LIMIT 1
