@@ -47,7 +47,7 @@ Returns the list of tool definitions configured for a specific agent.
 
 ## Utilities (`utils.py`)
 
-- `sanitize_mongo_pipeline(pipeline)`: Recursively fixes common LLM formatting errors in MongoDB pipelines (e.g., stripping quotes from keys like `$match`).
+- `sanitize_mongo_pipeline(pipeline)`: Recursively fixes common LLM formatting errors in document aggregation pipelines (e.g., stripping quotes from keys like `$match`).
 - `serialize_chat_history(history)` / `deserialize_chat_history(data)`: Converts between Google GenAI `Content` objects and JSON-serializable dictionaries.
 
 ## Testing

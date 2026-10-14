@@ -7,7 +7,7 @@ The Valstorm Function System allows you to write, manage, and execute custom Pyt
 A "Function" in Valstorm is a snippet of Python code executed securely in a sandboxed environment. Every function must define an asynchronous `execute` method that receives a `PlatformContext` object, giving it unified access to database operations, external integrations, and communication tools.
 
 ### Key Capabilities
-- **Database Operations:** Full CRUD and querying (SQL and MongoDB pipelines).
+- **Database Operations:** Full CRUD and querying (SQL and advanced aggregation pipelines).
 - **Communication:** Sending SMS, emails, and UI notifications.
 - **Integrations:** Access to Google Workspace, Salesforce, Twilio, and Microsoft integrations.
 - **Workflows:** Triggering other automations or calling other functions.

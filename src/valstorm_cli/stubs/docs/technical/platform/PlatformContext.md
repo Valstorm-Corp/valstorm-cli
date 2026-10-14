@@ -29,7 +29,7 @@ async def my_route(ctx: PlatformContext = Depends(get_platform_context)):
 ## Sub-Contexts
 
 ### 1. `records` (RecordContext)
-Handles Create, Update, and Delete (CUD) operations on MongoDB collections. Supports both synchronous and asynchronous execution (via Celery).
+Handles Create, Update, and Delete (CUD) operations on platform collections. Supports both synchronous and asynchronous execution (via Celery).
 
 - `create(api_name, input_data, async_run=False, **kwargs)`
 - `update(api_name, input_data, async_run=False, **kwargs)`
@@ -37,10 +37,10 @@ Handles Create, Update, and Delete (CUD) operations on MongoDB collections. Supp
 - `bulk_write(api_name, operations, **kwargs)`
 
 ### 2. `query` (QueryContext)
-Provides methods for querying data using SQL-like syntax or MongoDB aggregation pipelines.
+Provides methods for querying data using SQL-like syntax or structured aggregation pipelines.
 
 - `sql(query, **kwargs)`: Executes a SQL-like query.
-- `mongo(collection, pipeline, **kwargs)`: Executes a MongoDB aggregation pipeline.
+- `mongo(collection, pipeline, **kwargs)`: Executes a structured document aggregation pipeline.
 - `resolve_lookup(api_name, record_id)`: Resolves a record ID into a full lookup object.
 
 ### 3. `schemas` (SchemaContext)
@@ -92,5 +92,5 @@ Accesses organization-level settings and configuration.
 
 ## Direct Access
 
-- `platform.db`: Provides direct access to the organization's MongoDB database.
+- `platform.db`: Provides direct access to the organization's database.
 - `platform.log(message, level="info")`: Centralized logging via `valstorm.dependencies.add_log`.
