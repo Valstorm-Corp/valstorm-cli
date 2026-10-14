@@ -10,7 +10,7 @@ dependencies = [
     "httpx>=0.27.0",
     "rich>=13.0.0",
     "python-dotenv>=1.0.0",
-    "valstorm-mcp @ git+https://github.com/Valstorm-Corp/valstorm-mcp.git",
+    "valstorm-mcp-server @ git+https://github.com/Valstorm-Corp/valstorm-mcp.git",
     "valstorm-client",
 ]
 
