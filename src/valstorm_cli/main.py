@@ -72,7 +72,7 @@ def agent_command(
     vsagent_bin = shutil.which("vsagent") or shutil.which("vagent")
     if not vsagent_bin:
         console.print("[bold red]Error:[/bold red] vsagent is not installed on your PATH.")
-        console.print("Run [cyan]uv tool install --force apps/agent-runtime[/cyan] to install it.")
+        console.print("Run [cyan]uv tool install --from git+https://github.com/Valstorm-Corp/valstorm-agent.git valstorm-agent --force[/cyan] to install it.")
         raise typer.Exit(1)
 
     cmd = [vsagent_bin]
@@ -129,39 +129,65 @@ def update():
         current_version = "unknown"
 
     console.print(f"Current version: [cyan]{current_version}[/cyan]")
-    repo_url = "git+https://github.com/Valstorm-Corp/monorepo.git#subdirectory=cli"
+    repo_url = "git+https://github.com/Valstorm-Corp/valstorm-cli.git"
+    client_url = "git+https://github.com/Valstorm-Corp/valstorm-client-python.git"
+    mcp_url = "git+https://github.com/Valstorm-Corp/valstorm-mcp.git"
     
     try:
         with console.status("[bold cyan]Updating Valstorm CLI...[/bold cyan]") as status:
             is_installed = "site-packages" in __file__
 
-            # Check if we are running inside the monorepo source tree itself
+            # Check if we are running inside the monorepo source tree itself with local packages present
             if not is_installed:
                 try:
-                    root = get_project_root()
-                    if (root / "cli" / "pyproject.toml").exists():
-                        status.update("[bold cyan]Detected local monorepo. Running uv sync...[/bold cyan]")
-                        if shutil.which("uv"):
-                            subprocess.run(["uv", "sync", "--project", str(root / "cli")], check=True, capture_output=True)
-                            console.print("[bold green]✓[/bold green] Local workspace synced successfully.")
-                            return
+                    current = Path(__file__).resolve()
+                    for p in [current, *current.parents]:
+                        if (
+                            (p / "apps" / "cli" / "pyproject.toml").exists()
+                            and (p / "packages" / "client-python" / "pyproject.toml").exists()
+                        ):
+                            status.update("[bold cyan]Detected local monorepo. Running uv sync...[/bold cyan]")
+                            if shutil.which("uv"):
+                                subprocess.run(["uv", "sync", "--project", str(p / "apps" / "cli")], check=True, capture_output=True)
+                                console.print("[bold green]✓[/bold green] Local workspace synced successfully.")
+                                return
                 except Exception:
                     pass
 
             # Check if installed as a uv tool first
-            if shutil.which("uv") and "uv/tools" in sys.executable:
+            if shutil.which("uv") and ("uv/tools" in sys.executable or "uv\\tools" in sys.executable):
                 status.update("[bold cyan]Detected installation as a uv tool. Upgrading...[/bold cyan]")
-                subprocess.run(["uv", "tool", "upgrade", "valstorm-cli"], check=True, capture_output=True)
+                try:
+                    subprocess.run(["uv", "tool", "upgrade", "valstorm-cli"], check=True, capture_output=True)
+                except subprocess.CalledProcessError:
+                    subprocess.run(
+                        [
+                            "uv",
+                            "tool",
+                            "install",
+                            "--from",
+                            repo_url,
+                            "--with",
+                            client_url,
+                            "--with",
+                            mcp_url,
+                            "valstorm-cli",
+                            "--force",
+                            "--upgrade",
+                        ],
+                        check=True,
+                        capture_output=True,
+                    )
                 console.print("[bold green]✓[/bold green] Valstorm CLI uv tool updated successfully.")
                 return
 
             # Fallback to pip upgrade
             if shutil.which("uv"):
                 status.update("[bold cyan]Using uv pip to upgrade from GitHub...[/bold cyan]")
-                cmd = ["uv", "pip", "install", "--upgrade", repo_url]
+                cmd = ["uv", "pip", "install", "--upgrade", client_url, mcp_url, repo_url]
             else:
                 status.update("[bold cyan]Using pip to upgrade from GitHub...[/bold cyan]")
-                cmd = [sys.executable, "-m", "pip", "install", "--upgrade", repo_url]
+                cmd = [sys.executable, "-m", "pip", "install", "--upgrade", client_url, mcp_url, repo_url]
                  
             subprocess.run(cmd, check=True, capture_output=True)
             
@@ -253,7 +279,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "valstorm-cli @ git+https://github.com/Valstorm-Corp/valstorm-cli.git",
-    "valstorm-mcp @ git+https://github.com/Valstorm-Corp/valstorm-mcp.git",
+    "valstorm-mcp-server @ git+https://github.com/Valstorm-Corp/valstorm-mcp.git",
+    "valstorm-client @ git+https://github.com/Valstorm-Corp/valstorm-client-python.git",
     "httpx>=0.27.0"
 ]
 """

@@ -217,6 +217,7 @@ class ChatRequest(BetterBaseModel):
     agent_id: Optional[str] = None
     ai_chat: Optional[str] = None
     model: Optional[str] = None
+    reasoning_effort: Optional[str] = None
     system_prompt: Optional[str] = None
     allowed_tools: Optional[List[str]] = None
     ui_context: Optional[str] = None
@@ -511,6 +512,7 @@ class Organization(OrganizationBase):
     credits_currency: str = Field(default='USD', json_schema_extra={'system': True, 'title': 'Credits Currency', 'type': 'string'})
     shared_with: Optional[list] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Shared With', 'type': 'list', 'format': 'sharing'})
     subscription: Optional[dict] = Field(default_factory=dict)
+    billing: Optional[dict] = Field(default_factory=lambda: {'auto_replenish_enabled': False, 'replenish_threshold': 50.0, 'replenish_amount': 100.0, 'is_twilio_byot': False, 'twilio_subaccount_sid': None, 'replenish_in_flight': False}, json_schema_extra={'system': True, 'title': 'Billing Configuration', 'type': 'json', 'description': 'Organization auto-replenishment and telephony billing settings'})
     publishable_key: Optional[str] = Field(default=None, json_schema_extra={'system': True, 'title': 'Publishable Key', 'type': 'string', 'description': 'Public API key for inbound form and webhook ingestion (pk_live_...)'})
     allowed_inbound_origins: Optional[List[str]] = Field(default_factory=list, json_schema_extra={'system': True, 'title': 'Allowed Inbound Origins', 'type': 'list', 'description': 'Whitelisted website domains allowed to submit public inbound forms'})
     inbound_form_settings: Optional[dict] = Field(default_factory=dict, json_schema_extra={'system': True, 'title': 'Inbound Form Settings', 'type': 'json', 'description': 'Configuration options for inbound public forms and webhooks'})

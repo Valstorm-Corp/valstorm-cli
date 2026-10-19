@@ -1,6 +1,6 @@
 [project]
 name = "valstorm-cli"
-version = "1.2.0"
+version = "1.2.1"
 description = "Valstorm Developer CLI"
 readme = "README.md"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -11,7 +11,7 @@ dependencies = [
     "rich>=13.0.0",
     "python-dotenv>=1.0.0",
     "valstorm-mcp-server @ git+https://github.com/Valstorm-Corp/valstorm-mcp.git",
-    "valstorm-client",
+    "valstorm-client @ git+https://github.com/Valstorm-Corp/valstorm-client-python.git",
 ]
 
 [dependency-groups]

@@ -1,6 +1,11 @@
 # Valstorm CLI
 
-A local command-line interface for Valstorm developers.
+A local command-line interface for Valstorm developers to authenticate via OAuth 2.1 + PKCE, pull and push object schemas as code, and manage local workspaces.
+
+- **Official Tool Page & Quickstart:** [https://www.valstorm.com/free-tools/valstorm-cli](https://www.valstorm.com/free-tools/valstorm-cli?utm_source=github&utm_medium=readme&utm_campaign=valstorm_cli)
+- **All Valstorm Free & Open-Source Tools:** [https://www.valstorm.com/free-tools](https://www.valstorm.com/free-tools?utm_source=github&utm_medium=readme&utm_campaign=valstorm_cli)
+- **Valstorm BOS Platform Overview:** [https://www.valstorm.com/bos](https://www.valstorm.com/bos?utm_source=github&utm_medium=readme&utm_campaign=valstorm_cli)
+- **Valstorm Pricing & Self-Serve Workspace:** [https://www.valstorm.com/pricing](https://www.valstorm.com/pricing?utm_source=github&utm_medium=readme&utm_campaign=valstorm_cli)
 
 ## Prerequisites
 
