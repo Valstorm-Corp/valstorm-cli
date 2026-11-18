@@ -36,6 +36,7 @@ class BaseContext:
         pass
 from valstorm_platform.twilio_context import TwilioContext
 from valstorm_platform.telnyx_context import TelnyxContext
+from valstorm_platform.telephony_context import TelephonyContext
 
 class RecordContext(BaseContext):
     """Context for record-related operations (CUD)."""
@@ -147,15 +148,9 @@ class SchemaContext(BaseContext):
         Delete a custom schema.
         """
         pass
-
-class TaskContext(BaseContext):
-    """Context for background task management."""
-
-    async def schedule(self, name: str, func: str, run_at: datetime, data: dict, **kwargs):
-        """
-        Schedule a task for future execution.
-        """
-        pass
+from valstorm_platform.cache_context import CacheContext
+from valstorm_platform.credential_context import CredentialContext
+from valstorm_platform.task_context import TaskContext
 
 class FileContext(BaseContext):
     """Context for file operations (S3 and VFS)."""
@@ -227,6 +222,12 @@ class FileContext(BaseContext):
         """
         pass
 
+    async def generate_pdf(self, output_name: str='generated.pdf', metadata: Union[dict, str]=None, data: Union[dict, list]=None, pdf_template: Union[str, bytes, dict]=None, file_id: Optional[str]=None, public_upload: bool=False, randomize_name: bool=True, **kwargs) -> dict:
+        """
+        Fills and flattens a PDF template (from bytes, base64, or VFS `file_id`) and uploads to S3/VFS.
+        """
+        pass
+
 class NotificationContext(BaseContext):
     """Sub-context for notification operations."""
 
@@ -250,7 +251,7 @@ class CommunicationContext(BaseContext):
 
     async def send_sms(self, to_phone: Optional[str]=None, message: str='', **kwargs):
         """
-        Send an SMS message via Twilio. Delegates to TwilioContext.
+        Send an SMS message via Unified TelephonyContext (routes to Telnyx or Twilio).
         """
         pass
 
@@ -326,18 +327,27 @@ class SalesforceContext(BaseContext):
         Update record(s) in Salesforce.
         """
         pass
+
+    async def upload_file(self, record_id: Optional[str]=None, file_name: Optional[str]=None, file_base64: Optional[str]=None, **kwargs):
+        """
+        Uploads a file to Salesforce ContentVersion and links it to `record_id` (`linked_entity_id`).
+        """
+        pass
 from valstorm_platform.google_context import GoogleContext
+from valstorm_platform.ai_context import AIContext
 
 class AgentContext(BaseContext):
     """Context for inter-agent communication."""
 
-    async def call(self, agent_id: str, message: str, **kwargs):
+    async def call(self, agent_id: str, message: str, background: bool=False, **kwargs):
         """
         Delegates a task to another AI Agent and returns the result.
+        If `background=True`, dispatches a non-blocking Cloud Agent Runtime ReAct loop via `platform.ai.start_chat`.
         
         Args:
-            agent_id (str): The ID of the target agent to call.
+            agent_id (str): The ID or profile of the target agent to call.
             message (str): The instruction or message to send to the agent.
+            background (bool): If True, runs asynchronously in the background without blocking the thread.
         """
         pass
 from .stripe_context import StripeContext
@@ -432,6 +442,14 @@ class PlatformContext:
         """
         Initialize the platform context.
         """
+        pass
+
+    @classmethod
+    def for_org(cls, org_id: str, user_id: Optional[str]=None, email: str='integration@valstorm.com', name: str='Valstorm Integration User') -> 'PlatformContext':
+        pass
+
+    @classmethod
+    async def for_external_account(cls, provider: str, external_id: str, default_org_id: Optional[str]=None) -> 'PlatformContext':
         pass
 
     @property

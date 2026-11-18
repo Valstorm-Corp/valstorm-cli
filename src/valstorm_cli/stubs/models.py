@@ -227,6 +227,10 @@ class ChatRequest(BetterBaseModel):
     hermes_api_key: Optional[str] = None
     session_id: Optional[str] = None
     provider: Optional[str] = None
+    chat_name: Optional[str] = None
+    related_to: Optional[str] = None
+    files: Optional[List[Any]] = None
+    attachments: Optional[List[Dict[str, Any]]] = None
     run_id: Optional[str] = None
     step_id: Optional[str] = None
     parent_run_id: Optional[str] = None
@@ -480,6 +484,7 @@ class User(StandardBase):
     profile_picture: Optional[Image] = None
     vacation: Optional[List[datetime]] = []
     activation_code: Optional[str] = None
+    is_password_reset: Optional[bool] = False
     email_addresses: Optional[List[str]] = []
     mfa_required: bool = True
     hashed_password: Optional[str] = None
@@ -1002,8 +1007,8 @@ class ScheduleTriggerSetting(BetterBaseModel):
     cron_schedule: str
     active: bool = True
     data: Optional[dict] = None
-    function: Optional[dict] = None
-    automation: Optional[dict] = None
+    function: Optional[PrefixedID] | Optional[dict] = None
+    automation: Optional[PrefixedID] | Optional[dict] = None
 
 class AcceptedResponse(BetterBaseModel):
     detail: str
@@ -1142,6 +1147,8 @@ class Function(BetterBaseModel):
     file_name: str
     app: dict | PrefixedID | str = ''
     code: str = ''
+    public: bool = False
+    provider: Optional[str] = 'None'
 
 class PersonalAccessTokenCreate(BaseModel):
     name: str

@@ -284,7 +284,7 @@ class ValstormAuth:
         base_url = get_api_base_url(self.env)
         timeout = kwargs.get("timeout", 30.0)
 
-        if self.access_token and self.access_token.startswith("vst_pat_"):
+        if self.access_token and self.access_token.startswith(("vst_pat_", "pat_")):
             auth = PatAuth(self.access_token)
         else:
             auth = UserJwtAuth(
@@ -408,7 +408,21 @@ class ValstormAuth:
             
             # 2. Get sandbox token
             parent_payload = decode_jwt_payload(parent_token)
-            parent_org_id = parent_payload.get("org")
+            parent_org_id = (
+                parent_payload.get("org")
+                or parent_payload.get("org_id")
+                or parent_payload.get("organization_id")
+            )
+            if not parent_org_id and parent_token.startswith(("pat_", "vst_pat_")):
+                try:
+                    import base64
+                    clean_pat = parent_token[4:] if parent_token.startswith("vst_pat_") else parent_token
+                    parts = clean_pat.split("_", 2)
+                    if len(parts) == 3 and parts[1]:
+                        enc_org = parts[1] + ("=" * ((4 - len(parts[1]) % 4) % 4))
+                        parent_org_id = base64.urlsafe_b64decode(enc_org).decode("utf-8")
+                except Exception:
+                    parent_org_id = None
             if not parent_org_id:
                 console.print("[red]Could not extract parent organization ID from authentication token.[/red]")
                 return False
