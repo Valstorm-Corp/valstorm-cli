@@ -1,149 +1,93 @@
 import json
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Any, Dict
 
-def bundle_local_app(app_config_path: Path, workspace_root: Path) -> Dict[str, Any]:
+from .sync import KNOWN_METADATA_OBJECTS, STANDARD_OBJECTS
+
+
+def bundle_local_app(app_dir: Path) -> Dict[str, Any]:
     """
-    Reads an app.json config, compiles all associated schemas, and auto-discovers/collects
-    all local object metadata records and python source files belonging to the app.
+    Compiles a local Open Valstorm workspace directory into an AppBundle dictionary
+    ready for `PUT /v1/apps/deploy`.
+
+    Reads:
+      - `<app_dir>/valstorm.json`
+      - `<app_dir>/schemas/*.json`
+      - `<app_dir>/<api_name>/*.py` and `<app_dir>/<api_name>/*.json`
+      - `<app_dir>/.valstorm/metadata.json` (for tracked IDs & metadata)
     """
-    with open(app_config_path, "r") as f:
-        app_config = json.load(f)
-        
-    app_id = app_config.get("id")
-    if not app_id:
-        raise ValueError("The 'id' (UUID) of the app is required in the configuration.")
-        
-    bundle = {
-        "id": app_id,
-        "name": app_config.get("name", "Unnamed App"),
-        "description": app_config.get("description", ""),
-        "owner": app_config.get("owner") or "Valstorm",
-        "version": app_config.get("version", "1.0.0"),
+    root = app_dir.resolve()
+    config_path = root / "valstorm.json"
+    if not config_path.exists():
+        raise FileNotFoundError(f"valstorm.json not found in {root}")
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+
+    local_meta: Dict[str, Any] = {}
+    meta_file = root / ".valstorm" / "metadata.json"
+    if meta_file.exists():
+        try:
+            loaded = json.loads(meta_file.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                local_meta = loaded
+        except Exception:
+            pass
+
+    bundle: Dict[str, Any] = {
+        "name": config.get("name", root.name),
+        "description": config.get("description", ""),
+        "version": config.get("version", "1.0.0"),
         "schemas": [],
-        "records": {}
+        "records": {},
     }
-    
-    # 1. Resolve and Bundle Schemas
-    schemas_dir = workspace_root / "schemas"
-    schemas_to_bundle: List[str] = app_config.get("schemas", [])
-    
-    # Auto-discover schemas if schemas_dir exists
+    if config.get("app_id"):
+        bundle["id"] = config["app_id"]
+    elif config.get("id"):
+        bundle["id"] = config["id"]
+
+    # 1. Bundle schemas
+    schemas_dir = root / "schemas"
     if schemas_dir.exists():
-        for schema_file in schemas_dir.glob("*.json"):
-            try:
-                with open(schema_file, "r") as sf:
-                    schema_data = json.load(sf)
-                # If schema belongs to this app or is listed explicitly
-                if schema_data.get("app") == app_id or schema_file.stem in schemas_to_bundle:
-                    bundle["schemas"].append(schema_data)
-            except Exception:
-                pass
-                
-    # 2. Resolve and Bundle Records (functions, record_triggers, workspaces, etc.)
-    object_root = workspace_root / "object"
-    if object_root.exists():
-        for type_dir in object_root.iterdir():
-            if not type_dir.is_dir() or type_dir.name.startswith("."):
+        for sf in sorted(schemas_dir.glob("*.json")):
+            schema_doc = json.loads(sf.read_text(encoding="utf-8"))
+            if isinstance(schema_doc, dict):
+                schema_doc.setdefault("api_name", sf.stem)
+                bundle["schemas"].append(schema_doc)
+
+    # 2. Bundle object directories using exact api_name folders
+    configured_objs = config.get("objects")
+    allowed_folders = KNOWN_METADATA_OBJECTS | set(STANDARD_OBJECTS)
+    if isinstance(configured_objs, list):
+        allowed_folders |= {str(o).strip() for o in configured_objs if str(o).strip()}
+
+    for folder in sorted(root.iterdir()):
+        if not folder.is_dir() or folder.name.startswith(".") or folder.name not in allowed_folders:
+            continue
+        obj_type = folder.name
+        type_records: list[dict[str, Any]] = []
+
+        for f in sorted(folder.rglob("*")):
+            if not f.is_file() or f.suffix not in (".py", ".json"):
                 continue
-                
-            file_type = type_dir.name
-            type_records = []
-            
-            # Map of python files to their metadata JSON definitions
-            code_files = list(type_dir.glob("*.py"))
-            metadata_files = list(type_dir.glob("*.json"))
-            
-            # Exclude monolith metadata if present
-            metadata_files = [m for m in metadata_files if m.name != f"{file_type}_metadata.json"]
-            
-            # Read metadata JSONs to identify records belonging to this app
-            for meta_file in metadata_files:
-                try:
-                    with open(meta_file, "r") as mf:
-                        meta_data = json.load(mf)
-                    
-                    # Verify if this record belongs to our target app
-                    is_app_member = meta_data.get("app") == app_id
-                    
-                    # Also check if listed in explicit records of config (if provided)
-                    explicit_records = app_config.get("records", {}).get(file_type, [])
-                    is_explicit = False
-                    for er in explicit_records:
-                        if isinstance(er, str):
-                            if meta_data.get("file_name") == er or meta_file.name == er:
-                                is_explicit = True
-                                break
-                        elif isinstance(er, dict):
-                            if meta_data.get("id") and meta_data.get("id") == er.get("id"):
-                                is_explicit = True
-                                break
-                            elif meta_data.get("file_name") and meta_data.get("file_name") == er.get("file_name"):
-                                is_explicit = True
-                                break
-                    
-                    if is_app_member or is_explicit:
-                        # If there is a matching code file, read the code on-disk to make sure we push current code
-                        file_name = meta_data.get("file_name")
-                        if file_name:
-                            code_file_path = type_dir / file_name
-                            if code_file_path.exists():
-                                with open(code_file_path, "r") as cf:
-                                    meta_data["code"] = cf.read()
-                                    
-                        type_records.append(meta_data)
-                except Exception:
-                    pass
-                    
-            # If explicit listings were specified but didn't have metadata JSON files,
-            # we can create skeleton records for them, or append the dict directly
-            explicit_records = app_config.get("records", {}).get(file_type, [])
-            for er in explicit_records:
-                if isinstance(er, str):
-                    # Check if already added
-                    if any(r.get("file_name") == er for r in type_records):
-                        continue
-                        
-                    file_path = type_dir / er
-                    if file_path.exists():
-                        try:
-                            with open(file_path, "r") as f_code:
-                                code_content = f_code.read()
-                            
-                            # Generate basic skeleton
-                            skeleton = {
-                                "name": file_path.stem.replace("_", " ").title(),
-                                "file_name": er,
-                                "code": code_content,
-                                "app": app_id,
-                                "active": True
-                            }
-                            
-                            # Set default trigger fields if applicable
-                            if file_type == "record_trigger":
-                                skeleton["object_api_name"] = "contact" # default fallback
-                                skeleton["trigger_type"] = "after_upsert"
-                                
-                            type_records.append(skeleton)
-                        except Exception:
-                            pass
-                elif isinstance(er, dict):
-                    if any(r.get("id") == er.get("id") for r in type_records):
-                        continue
-                    
-                    # Try to load the latest local code if a file_name is defined
-                    file_name = er.get("file_name")
-                    if file_name:
-                        file_path = type_dir / file_name
-                        if file_path.exists():
-                            try:
-                                with open(file_path, "r") as f_code:
-                                    er["code"] = f_code.read()
-                            except Exception:
-                                pass
-                    type_records.append(er)
-                        
-            if type_records:
-                bundle["records"][file_type] = type_records
-                
+            rel_key = str(f.relative_to(root))
+            tracked = local_meta.get(rel_key, {})
+
+            if f.suffix == ".py":
+                rec = dict(tracked)
+                rec.pop("type", None)
+                rec["code"] = f.read_text(encoding="utf-8")
+                rec.setdefault("file_name", f.name)
+                rec.setdefault("name", f.stem)
+                type_records.append(rec)
+            else:
+                rec = json.loads(f.read_text(encoding="utf-8"))
+                if isinstance(rec, dict):
+                    if tracked.get("id") and not rec.get("id"):
+                        rec["id"] = tracked["id"]
+                    rec.setdefault("file_name", f.name)
+                    type_records.append(rec)
+
+        if type_records:
+            bundle["records"][obj_type] = type_records
+
     return bundle

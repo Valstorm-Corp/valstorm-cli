@@ -18,6 +18,35 @@ Optional MCP server extra:
 pip install "valstorm-cli[mcp] @ git+https://github.com/Valstorm-Corp/valstorm-cli.git"
 ```
 
+## Multi-Org Workspace Layout
+
+Each org gets its own self-contained folder with `valstorm.json` inside it, so you can manage multiple orgs side-by-side simply by opening terminals in each folder:
+
+```bash
+valstorm init acme-prod --profile acme --env prod
+cd acme-prod
+valstorm pull
+```
+
+```text
+acme-prod/
+├── valstorm.json                 # Org-scoped env/profile/api_url/sandbox/objects
+├── .gitignore                    # Ignores .valstorm/ local sync state
+├── schemas/                      # Object schemas (<api_name>.json)
+├── app/                          # app (*.json)
+├── record_trigger/               # record_trigger (*.py)
+├── function/                     # function (*.py)
+├── schedule_trigger_setting/     # schedule_trigger_setting (*.json)
+├── permission/                   # permission (*.json)
+├── role/                         # role (*.json)
+└── queries/                      # Created lazily on `sql`/`graphql` --save
+```
+
+Optional `init` flags:
+- `--minimal`: create only `valstorm.json` and `.gitignore`.
+- `--ai`: also generate opt-in `.mcp.json` (via `uvx valstorm-mcp`) and `CLAUDE.md`.
+- `--url`: bind a self-hosted Open Valstorm API URL.
+
 ## Quick Start
 
 ```bash
@@ -26,8 +55,10 @@ valstorm login
 valstorm login --url https://api.acme.internal
 valstorm login --pat pat_... --url https://api.acme.internal
 
-# Initialize a local workspace & sync metadata/schemas
-valstorm init
+# Open the active org in your browser
+valstorm open
+
+# Sync metadata & schemas in one roundtrip
 valstorm pull
 valstorm push --dry-run
 
@@ -55,9 +86,8 @@ valstorm rpc call utils.ping -a message=hello
 
 | Group / Command | Description |
 |---|---|
-| `status`, `version`, `update`, `init` | API health, CLI version/upgrade, workspace scaffolding |
+| `init`, `open`, `status`, `version`, `update` | Org workspace setup, open in browser, API health, CLI version/upgrade |
 | `login`, `auth` | OAuth2 PKCE / PAT login (`--url` for self-hosted), profiles, `whoami`, `pat` management |
-| `project` | `open` web app, `update-stubs` |
 | `pull`, `push` | Single-roundtrip ACID metadata & schema sync (`/v1/apps/metadata/pull`, `/push`) |
 | `schema` | `list`, `get`, `create`, `update`, `delete`, `status` (PG drift), `sync` (PG reflection), `field` |
 | `record` | `get` (default raw IDs; `--hydrate`), `create`, `update`, `delete`, `restore` |

@@ -1,77 +1,63 @@
 from pathlib import Path
-from typing import Set, Dict, Any
+from typing import Any, Dict, Set
 
-def build_manifest_from_files(files: Set[Path], root_dir: Path) -> Dict[str, Any]:
+_IGNORED_TOP_DIRS = {"schemas", "queries", ".valstorm", ".git", "__pycache__"}
+
+
+def build_manifest_from_files(changed_files: Set[Path], project_root: Path) -> Dict[str, Any]:
     """
-    Scans a set of files and maps them to Valstorm metadata object types
-    or database schemas. Builds a valid manifest data structure.
+    Converts a set of changed workspace file paths into a Valstorm deployment manifest:
+      {
+        "schemas": ["contact", ...],
+        "objects": {
+          "function": ["my_fn.py"],
+          "record_trigger": ["on_save.py"],
+          "schedule_trigger_setting": ["nightly.json"],
+          "permission": ["admin.json"],
+          "role": ["editor.json"],
+          "app": ["crm.json"]
+        }
+      }
     """
-    manifest = {
-        "version": "1.0",
-        "description": "Git diff generated deployment manifest",
+    manifest: Dict[str, Any] = {
+        "schemas": [],
         "objects": {},
-        "schemas": []
     }
-    
-    for file_path in files:
+
+    root_resolved = project_root.resolve()
+    schemas_seen: set[str] = set()
+    objects_seen: dict[str, set[str]] = {}
+
+    for file_path in sorted(changed_files):
         try:
-            rel_path = file_path.relative_to(root_dir)
+            rel = file_path.resolve().relative_to(root_resolved)
         except ValueError:
-            continue  # The file is not under the workspace root directory
-            
-        parts = rel_path.parts
-        if not parts:
             continue
-            
-        # 1. Match Schemas (saved under <workspace>/schemas/<schema_name>.json)
-        if parts[0] == "schemas" and file_path.suffix == ".json":
-            manifest["schemas"].append(file_path.stem)
-            
-        # 2. Match Object Files (saved under <workspace>/object/<object_type>/<file_name>)
-        elif parts[0] == "object" and len(parts) >= 3:
-            obj_type = parts[1]
-            file_name = parts[2]
-            
-            # We care about actual files (code, JSON metadata, or template files)
-            if file_path.is_file() or file_path.suffix in (".py", ".json", ".yaml", ".yml", ".md", ".html"):
-                stem_name = file_path.stem
-                
-                # Exclude monolithic legacy metadata JSON or any summary/config file
-                if file_name == f"{obj_type}_metadata.json":
-                    continue
-                # Exclude individual companion metadata JSONs from being listed twice in code lists
-                # Usually we want function and record_trigger listings to point to the code .py filename,
-                # while other object types might point directly to .json metadata filenames.
-                if obj_type in ("function", "record_trigger"):
-                    target_name = f"{stem_name}.py"
-                else:
-                    # For other types (e.g. workspace, permission, app, ai_agent), target the specific file name
-                    target_name = file_name
-                
-                # Check for companion metadata JSON filenames that end with `{stem_name}_{id}.json`
-                # If it's a companion metadata JSON file for a python file, normalize it to the python file
-                if obj_type in ("function", "record_trigger") and file_path.suffix == ".json":
-                    # If there's an underscore, it might be {name}_{uuid}.json
-                    if "_" in stem_name:
-                        parts_of_stem = stem_name.rsplit("_", 1)
-                        # If the last segment looks like an ID, use the first segment
-                        if len(parts_of_stem) == 2 and any(c.isdigit() for c in parts_of_stem[1]):
-                            target_name = f"{parts_of_stem[0]}.py"
-                        else:
-                            target_name = f"{stem_name}.py"
-                    else:
-                        target_name = f"{stem_name}.py"
-                        
-                if obj_type not in manifest["objects"]:
-                    manifest["objects"][obj_type] = []
-                    
-                if target_name not in manifest["objects"][obj_type]:
-                    manifest["objects"][obj_type].append(target_name)
-                    
-    # Clean up empty properties
-    if not manifest["schemas"]:
+
+        parts = rel.parts
+        if len(parts) < 2:
+            continue
+
+        top_dir = parts[0]
+        if top_dir.startswith("."):
+            continue
+
+        # 1. schemas/<api_name>.json
+        if top_dir == "schemas" and file_path.suffix == ".json":
+            schemas_seen.add(file_path.stem)
+            continue
+
+        if top_dir in _IGNORED_TOP_DIRS:
+            continue
+
+        # 2. <api_name>/<file_name>
+        if file_path.suffix in (".py", ".json"):
+            objects_seen.setdefault(top_dir, set()).add(file_path.name)
+
+    if schemas_seen:
+        manifest["schemas"] = sorted(schemas_seen)
+    else:
         manifest.pop("schemas")
-    if not manifest["objects"]:
-        manifest["objects"] = {}
-        
+
+    manifest["objects"] = {k: sorted(v) for k, v in sorted(objects_seen.items())}
     return manifest

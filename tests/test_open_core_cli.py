@@ -22,12 +22,17 @@ def test_root_command_surface_slimmed():
     assert result.exit_code == 0
 
     # Removed legacy / non-core commands must NOT appear
-    for removed in ("hermes", "scaffold", "agent", "mcp", "deploy", "manifest"):
+    for removed in ("hermes", "scaffold", "agent", "mcp", "deploy", "manifest", "project"):
         assert f"  {removed} " not in result.output
 
     # Core Open Valstorm commands MUST appear
-    for core in ("auth", "project", "schema", "record", "fn", "app", "sandbox", "vfs", "rpc", "pull", "push", "sql", "graphql", "search", "ask"):
+    for core in ("init", "open", "auth", "schema", "record", "fn", "app", "sandbox", "vfs", "rpc", "pull", "push", "sql", "graphql", "search", "ask"):
         assert core in result.output
+
+    # Stubs directory and project.py must be removed
+    pkg_dir = Path(__file__).resolve().parents[1] / "src" / "valstorm_cli"
+    assert not (pkg_dir / "stubs").exists()
+    assert not (pkg_dir / "project.py").exists()
 
 
 def test_vfs_command_surface_slimmed():
@@ -345,3 +350,141 @@ def test_vfs_ls_handles_open_valstorm_list_tree(monkeypatch):
     assert res.exit_code == 0, res.output
     assert "Engineering" in res.output
     assert "RFCs" in res.output
+
+
+# ---------------------------------------------------------------------------
+# 9. Multi-Org `init` Layout, `open`, `bundler`, and `manifest_builder`
+# ---------------------------------------------------------------------------
+
+def test_init_creates_self_contained_org_layout(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    res = runner.invoke(app, ["init", "acme-prod", "--profile", "acme", "--env", "prod"])
+    assert res.exit_code == 0, res.output
+
+    org_dir = tmp_path / "acme-prod"
+    assert (org_dir / "valstorm.json").is_file()
+    cfg = json.loads((org_dir / "valstorm.json").read_text())
+    assert cfg["name"] == "acme-prod"
+    assert cfg["profile"] == "acme"
+    assert cfg["env"] == "prod"
+    assert cfg["objects"] == [
+        "app",
+        "record_trigger",
+        "function",
+        "schedule_trigger_setting",
+        "permission",
+        "role",
+    ]
+    assert ".valstorm/" in (org_dir / ".gitignore").read_text()
+
+    expected_dirs = {
+        "schemas",
+        "app",
+        "record_trigger",
+        "function",
+        "schedule_trigger_setting",
+        "permission",
+        "role",
+    }
+    created_dirs = {p.name for p in org_dir.iterdir() if p.is_dir()}
+    assert created_dirs == expected_dirs
+    assert not (org_dir / "api_trigger").exists()
+    assert not (org_dir / "queries").exists()
+    assert not (org_dir / "valstorm_platform").exists()
+    assert not (org_dir / ".mcp.json").exists()
+    assert not (org_dir / "CLAUDE.md").exists()
+
+
+def test_init_minimal_and_ai_flags(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    res_min = runner.invoke(app, ["init", "bare-org", "--minimal"])
+    assert res_min.exit_code == 0, res_min.output
+    bare = tmp_path / "bare-org"
+    assert (bare / "valstorm.json").is_file()
+    assert (bare / ".gitignore").is_file()
+    assert [p for p in bare.iterdir() if p.is_dir()] == []
+
+    res_ai = runner.invoke(app, ["init", "ai-org", "--ai", "--url", "https://api.acme.internal"])
+    assert res_ai.exit_code == 0, res_ai.output
+    ai_dir = tmp_path / "ai-org"
+    mcp_cfg = json.loads((ai_dir / ".mcp.json").read_text())
+    assert mcp_cfg["mcpServers"]["valstorm"]["command"] == "uvx"
+    assert mcp_cfg["mcpServers"]["valstorm"]["env"]["VALSTORM_API_URL"] == "https://api.acme.internal"
+    assert (ai_dir / "CLAUDE.md").is_file()
+
+
+def test_pull_defaults_to_standard_six_objects_without_api_trigger(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    res_init = runner.invoke(app, ["init", "org-a"])
+    assert res_init.exit_code == 0
+    monkeypatch.chdir(tmp_path / "org-a")
+
+    sdk = MagicMock()
+    sdk.apps.pull_metadata.return_value = {"schemas": {}, "objects": {}}
+    _patch_auth_with_sdk(monkeypatch, sdk_mock=sdk)
+
+    res_pull = runner.invoke(app, ["pull", "--force"])
+    assert res_pull.exit_code == 0, res_pull.output
+    called_types = sdk.apps.pull_metadata.call_args.kwargs["object_types"]
+    assert called_types == [
+        "app",
+        "record_trigger",
+        "function",
+        "schedule_trigger_setting",
+        "permission",
+        "role",
+    ]
+    assert "api_trigger" not in called_types
+
+
+def test_bundler_and_manifest_builder_use_org_api_name_layout(tmp_path):
+    from valstorm_cli.bundler import bundle_local_app
+    from valstorm_cli.manifest_builder import build_manifest_from_files
+
+    org_dir = tmp_path / "my-org"
+    for d in ("schemas", "function", "record_trigger", "role", "permission", "schedule_trigger_setting"):
+        (org_dir / d).mkdir(parents=True)
+
+    (org_dir / "valstorm.json").write_text(json.dumps({"name": "my-org", "env": "prod", "profile": "default"}))
+    s_file = org_dir / "schemas" / "contact.json"
+    s_file.write_text(json.dumps({"api_name": "contact", "title": "Contact"}))
+    fn_file = org_dir / "function" / "sync.py"
+    fn_file.write_text("def run():\n    return 1\n")
+    role_file = org_dir / "role" / "admin.json"
+    role_file.write_text(json.dumps({"name": "Admin"}))
+    sched_file = org_dir / "schedule_trigger_setting" / "nightly.json"
+    sched_file.write_text(json.dumps({"name": "Nightly"}))
+
+    bundle = bundle_local_app(org_dir)
+    assert bundle["name"] == "my-org"
+    assert len(bundle["schemas"]) == 1
+    assert bundle["records"]["function"][0]["code"] == "def run():\n    return 1\n"
+    assert bundle["records"]["role"][0]["name"] == "Admin"
+    assert bundle["records"]["schedule_trigger_setting"][0]["name"] == "Nightly"
+
+    manifest = build_manifest_from_files({s_file, fn_file, role_file, sched_file}, org_dir)
+    assert manifest == {
+        "schemas": ["contact"],
+        "objects": {
+            "function": ["sync.py"],
+            "role": ["admin.json"],
+            "schedule_trigger_setting": ["nightly.json"],
+        },
+    }
+
+
+def test_top_level_open_command(monkeypatch):
+    client = MagicMock()
+    client.post.return_value = httpx.Response(200, json={"code": "exch_123"})
+    fake_auth = _patch_auth_with_sdk(monkeypatch, client_mock=client)
+    fake_auth.profile = "acme"
+    fake_auth.web_base_url = "https://app.acme.internal"
+
+    opened = []
+    monkeypatch.setattr("valstorm_cli.main.webbrowser.open", lambda url: opened.append(url))
+
+    res = runner.invoke(app, ["open"])
+    assert res.exit_code == 0, res.output
+    assert opened == ["https://app.acme.internal/cli-login?code=exch_123"]

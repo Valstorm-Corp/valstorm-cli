@@ -13,27 +13,30 @@ from .manifest_builder import build_manifest_from_files
 
 console = Console()
 
-CODE_OBJECT_TYPES = {"function", "record_trigger", "api_trigger"}
+STANDARD_OBJECTS: list[str] = [
+    "app",
+    "record_trigger",
+    "function",
+    "schedule_trigger_setting",
+    "permission",
+    "role",
+]
 
-DEFAULT_METADATA_FOLDERS = {
-    "record_trigger": "record_trigger",
-    "api_trigger": "api_trigger",
-    "function": "function",
-    "automation": "automation",
-    "ai_agent": "ai_agent",
-    "app": "app",
-    "app_page": "app_page",
-    "app_metadata": "app_metadata",
-    "permission": "permission",
-    "notification_setting": "notification_setting",
-    "schedule_trigger_setting": "schedule_trigger_setting",
-    "workspace": "workspace",
-    "list_filter": "list_filter",
-    "dashboard": "dashboard",
-    "report": "report",
-    "tag": "tag",
-    "integrated_app": "integrated_app",
-    "oauth_app": "oauth_app",
+CODE_OBJECT_TYPES = {"function", "record_trigger"}
+
+KNOWN_METADATA_OBJECTS = set(STANDARD_OBJECTS) | {
+    "automation",
+    "ai_agent",
+    "app_page",
+    "app_metadata",
+    "notification_setting",
+    "workspace",
+    "list_filter",
+    "dashboard",
+    "report",
+    "tag",
+    "integrated_app",
+    "oauth_app",
 }
 
 
@@ -42,6 +45,19 @@ def _resolve_root() -> Path:
     if root:
         return root
     return Path.cwd()
+
+
+def _configured_objects(root: Path) -> list[str]:
+    cfg_file = root / "valstorm.json"
+    if cfg_file.exists():
+        try:
+            cfg = load_config(root)
+            objs = cfg.get("objects")
+            if isinstance(objs, list) and objs:
+                return [str(o).strip() for o in objs if str(o).strip()]
+        except Exception:
+            pass
+    return list(STANDARD_OBJECTS)
 
 
 def _load_local_metadata(root: Path) -> dict[str, Any]:
@@ -77,7 +93,12 @@ def pull(
         None,
         "--type",
         "-t",
-        help="Metadata object type(s) to pull (repeatable, e.g. -t function -t record_trigger). Defaults to all.",
+        help="Metadata object api_name(s) to pull (repeatable, e.g. -t function -t role). Defaults to valstorm.json `objects`.",
+    ),
+    pull_all: bool = typer.Option(
+        False,
+        "--all",
+        help="Pull all metadata object types from the org instead of only the configured workspace objects.",
     ),
     app_id: Optional[str] = typer.Option(None, "--app", "-a", help="Filter metadata and schemas by App ID."),
     file_name: Optional[str] = typer.Option(None, "--file-name", help="Pull a single record matching this file_name."),
@@ -100,7 +121,15 @@ def pull(
             raise typer.Exit(1)
         manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
 
-    object_types = [] if schemas_only else (list(types) if types else None)
+    if schemas_only:
+        object_types: Optional[list[str]] = []
+    elif types:
+        object_types = list(types)
+    elif pull_all or manifest_data is not None:
+        object_types = None
+    else:
+        object_types = _configured_objects(root)
+
     include_schemas = True if schemas_only else (not no_schemas)
 
     console.print("Pulling metadata from Open Valstorm...")
@@ -120,7 +149,7 @@ def pull(
     files_written = 0
     schemas_written = 0
 
-    # 1. Write schemas
+    # 1. Write schemas into <org-root>/schemas/<api_name>.json
     schemas_payload = res.get("schemas") or {}
     schema_items: list[tuple[str, dict[str, Any]]] = []
     if isinstance(schemas_payload, dict):
@@ -139,13 +168,13 @@ def pull(
             target_file.write_text(json.dumps(schema_doc, indent=2, default=str), encoding="utf-8")
             schemas_written += 1
 
-    # 2. Write metadata objects
+    # 2. Write metadata objects into <org-root>/<api_name>/
     objects_payload = res.get("objects") or {}
     if isinstance(objects_payload, dict) and not schemas_only:
         for obj_type, records in objects_payload.items():
             if not isinstance(records, list) or not records:
                 continue
-            target_dir = root / DEFAULT_METADATA_FOLDERS.get(obj_type, obj_type)
+            target_dir = root / obj_type
             target_dir.mkdir(parents=True, exist_ok=True)
 
             for rec in records:
@@ -196,9 +225,8 @@ def _collect_push_payload(
     app_id: Optional[str],
 ) -> tuple[dict[str, Any], dict[str, Path]]:
     """
-    Collects schemas and metadata objects from the workspace into a single payload
-    compatible with `POST /v1/apps/metadata/push`.
-    Returns `(payload, file_map)` where `file_map` maps `(obj_type, file_name)` keys to local Paths.
+    Collects schemas and metadata objects from `<org-root>/schemas` and `<org-root>/<api_name>`
+    into a single payload compatible with `POST /v1/apps/metadata/push`.
     """
     local_meta = _load_local_metadata(root)
     schemas_to_push: list[dict[str, Any]] = []
@@ -208,7 +236,6 @@ def _collect_push_payload(
     manifest_schemas = set(manifest_data.get("schemas") or []) if manifest_data else None
     manifest_objects = manifest_data.get("objects") if manifest_data and isinstance(manifest_data.get("objects"), dict) else None
 
-    # Determine explicit file list when targeting a single path
     explicit_files: Optional[list[Path]] = None
     if target_path is not None:
         resolved = target_path.resolve()
@@ -243,8 +270,14 @@ def _collect_push_payload(
             payload["app_id"] = app_id
         return payload, rel_paths_by_key
 
-    # 2. Collect metadata objects
-    candidate_dirs = sorted([d for d in root.iterdir() if d.is_dir() and d.name in DEFAULT_METADATA_FOLDERS])
+    # 2. Collect metadata objects from <org-root>/<api_name>/
+    allowed_folders = KNOWN_METADATA_OBJECTS | set(_configured_objects(root))
+    if manifest_objects:
+        allowed_folders |= set(manifest_objects.keys())
+
+    candidate_dirs = sorted(
+        [d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".") and d.name in allowed_folders]
+    )
     for folder in candidate_dirs:
         obj_type = folder.name
         allowed_names = None
@@ -297,7 +330,7 @@ def _collect_push_payload(
 
 @requires_auth
 def push(
-    path: Optional[Path] = typer.Argument(None, help="Optional file or folder to push (defaults to whole workspace)."),
+    path: Optional[Path] = typer.Argument(None, help="Optional file or folder to push (defaults to whole org workspace)."),
     manifest: Optional[Path] = typer.Option(None, "--manifest", "-m", help="Push only items listed in a manifest JSON file."),
     diff: Optional[str] = typer.Option(None, "--diff", "-d", help="Push only files changed relative to a git ref (e.g. origin/main)."),
     schemas_only: bool = typer.Option(False, "--schemas-only", help="Push only object schemas from schemas/*.json."),

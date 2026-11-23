@@ -3,6 +3,7 @@ import json
 import shutil
 import subprocess
 import sys
+import webbrowser
 from pathlib import Path
 from typing import Optional
 
@@ -11,18 +12,17 @@ import typer
 from rich.console import Console
 
 from .app_cmds import app_cmds
-from .auth import get_api_base_url, get_auth, get_base_url
+from .auth import ValstormAuth, get_api_base_url, get_auth, get_base_url, requires_auth
 from .auth_cmds import auth_app
 from .auth_cmds import login as auth_login
 from .fn_cmds import fn_app
-from .project import _write_ai_configs, project_app, update_local_stubs
 from .query import graphql, sql
 from .record import record_app
 from .rpc_cmds import rpc_app
 from .sandbox import sandbox_app
 from .schema import schema_app
 from .search_cmds import ask_command, search_command
-from .sync import pull, push
+from .sync import STANDARD_OBJECTS, pull, push
 from .vfs_cmds import vfs_app
 
 app = typer.Typer(
@@ -33,7 +33,6 @@ console = Console()
 
 # Subcommand groups
 app.add_typer(auth_app, name="auth")
-app.add_typer(project_app, name="project")
 app.add_typer(schema_app, name="schema")
 app.add_typer(record_app, name="record")
 app.add_typer(fn_app, name="fn")
@@ -77,6 +76,33 @@ def login(
         pat=pat,
         refresh_token=refresh_token,
     )
+
+
+@app.command(name="open")
+@requires_auth
+def open_browser(
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
+    client: httpx.Client = None,  # type: ignore
+    auth: ValstormAuth = None,  # type: ignore
+):
+    """
+    Open the Valstorm web app in your default browser logged in as the current org/profile.
+    """
+    try:
+        res = client.post("/auth/cli-browser-token")
+        if res.status_code != 200:
+            console.print(f"[bold red]Failed to generate browser session ({res.status_code}):[/bold red] {res.text}")
+            raise typer.Exit(1)
+        exchange_code = res.json().get("code")
+    except httpx.RequestError as e:
+        console.print(f"[bold red]Connection Error:[/bold red] {e}")
+        raise typer.Exit(1)
+
+    base_web_url = auth.web_base_url.rstrip("/")
+    target_url = f"{base_web_url}/cli-login?code={exchange_code}"
+    console.print(f"Opening [bold blue]{base_web_url}[/bold blue] as [bold cyan]{auth.profile}[/bold cyan]...")
+    webbrowser.open(target_url)
 
 
 @app.command()
@@ -155,7 +181,6 @@ def update():
                 console.print(f"[bold red]uv tool update failed:[/bold red] {fallback_err}")
                 raise typer.Exit(1)
 
-    # Check if running from local editable monorepo
     if "monorepo" in str(cli_path) and "apps/cli" in str(cli_path):
         console.print("[yellow]Detected local monorepo development installation.[/yellow]")
         console.print("Pull the latest git changes and run [cyan]uv sync --project apps/cli[/cyan] to update.")
@@ -181,35 +206,95 @@ def update():
         raise typer.Exit(1)
 
 
+def _ensure_gitignore_entry(target_path: Path, entry: str = ".valstorm/") -> None:
+    gitignore = target_path / ".gitignore"
+    if gitignore.exists():
+        lines = gitignore.read_text(encoding="utf-8").splitlines()
+        if any(line.strip() == entry for line in lines):
+            return
+        prefix = "\n" if lines and lines[-1] != "" else ""
+        with open(gitignore, "a", encoding="utf-8") as fh:
+            fh.write(f"{prefix}{entry}\n")
+    else:
+        gitignore.write_text(f"{entry}\n", encoding="utf-8")
+
+
+def _write_optional_ai_files(target_path: Path, env: str, profile: str, api_url: Optional[str]) -> None:
+    mcp_env: dict[str, str] = {"VALSTORM_ENV": env, "VALSTORM_PROFILE": profile}
+    if api_url:
+        mcp_env["VALSTORM_API_URL"] = api_url
+    mcp_cfg = {
+        "mcpServers": {
+            "valstorm": {
+                "command": "uvx",
+                "args": [
+                    "--from",
+                    "git+https://github.com/Valstorm-Corp/valstorm-mcp.git",
+                    "valstorm-mcp",
+                ],
+                "env": mcp_env,
+            }
+        }
+    }
+    mcp_file = target_path / ".mcp.json"
+    if not mcp_file.exists():
+        mcp_file.write_text(json.dumps(mcp_cfg, indent=2) + "\n", encoding="utf-8")
+        console.print(f"[green]✓[/green] Created {mcp_file.name}")
+
+    claude_file = target_path / "CLAUDE.md"
+    if not claude_file.exists():
+        claude_file.write_text(
+            "# Open Valstorm Workspace Guide\n\n"
+            "## Core CLI Commands\n"
+            "- `valstorm pull [--schemas-only] [--type <api_name>] [--all]` — Pull org metadata & schemas.\n"
+            "- `valstorm push [--dry-run] [--diff origin/main]` — Push local changes in a single ACID transaction.\n"
+            "- `valstorm schema list | get | status | sync` — Inspect schemas and sync native PostgreSQL migrations.\n"
+            "- `valstorm sql \"SELECT id, name FROM contact LIMIT 10\"` — Query data (raw IDs by default; pass `--hydrate` for `{id, name}`).\n"
+            "- `valstorm graphql \"{ contact(limit: 5) { id name } }\"` — Run GraphQL queries (raw IDs by default; pass `--hydrate` for `{id, name}`).\n"
+            "- `valstorm fn list | validate <file.py> | run <target>` — Validate and execute serverless functions.\n"
+            "- `valstorm rpc list | call <target>` — Discover and invoke live PlatformContext & plugin methods.\n"
+            "- `valstorm app list | install | deploy | promote | publish` — Manage Valstorm apps.\n"
+            "- `valstorm vfs ls | upload | download | mv | rm | info | index` — Manage VFS vaults and files.\n"
+            "- `valstorm open` — Open this org in your browser.\n",
+            encoding="utf-8",
+        )
+        console.print(f"[green]✓[/green] Created {claude_file.name}")
+
+
 @app.command()
 def init(
-    name: Optional[str] = typer.Argument(None, help="Directory name to create (defaults to current directory)."),
+    name: Optional[str] = typer.Argument(None, help="Org workspace folder name to create (defaults to current directory)."),
     env: str = typer.Option("prod", "--env", "-e", help="Target environment (prod, dev, local)."),
-    profile: str = typer.Option("default", "--profile", "-p", help="Auth profile to bind to this workspace."),
+    profile: str = typer.Option("default", "--profile", "-p", help="Auth profile to bind to this org folder."),
     url: Optional[str] = typer.Option(None, "--url", "--api-url", help="Optional custom Open Valstorm API URL."),
+    web_url: Optional[str] = typer.Option(None, "--web-url", help="Optional custom Open Valstorm web URL."),
     app_id: Optional[str] = typer.Option(None, "--app", "-a", help="Optional default App ID for this workspace."),
-    skip_ai_configs: bool = typer.Option(False, "--skip-ai-configs", help="Skip generating AI IDE configs (.mcp.json, .claude, .gemini)."),
+    minimal: bool = typer.Option(False, "--minimal", help="Only create valstorm.json and .gitignore (skip object directories)."),
+    ai: bool = typer.Option(False, "--ai", help="Also generate opt-in .mcp.json (via uvx valstorm-mcp) and CLAUDE.md."),
 ):
     """
-    Initialize a new Open Valstorm developer workspace.
+    Initialize a self-contained Open Valstorm org workspace directory.
+
+    Places `valstorm.json` inside `<name>/` so each org you manage is isolated to its own folder.
     """
     target_path = Path(name) if name else Path.cwd()
     if name:
         target_path.mkdir(parents=True, exist_ok=True)
 
-    # 1. Standard workspace directories
-    for folder in ("schemas", "function", "record_trigger", "api_trigger", "queries"):
-        (target_path / folder).mkdir(exist_ok=True)
-
-    # 2. Write valstorm.json
+    # 1. Write org-scoped valstorm.json inside <name>/
     config_file = target_path / "valstorm.json"
+    clean_api_url = url.strip().rstrip("/") if url else None
+    clean_web_url = web_url.strip().rstrip("/") if web_url else None
     config: dict = {
         "name": target_path.name,
         "env": env.lower(),
         "profile": profile.lower(),
+        "objects": list(STANDARD_OBJECTS),
     }
-    if url:
-        config["api_url"] = url.strip().rstrip("/")
+    if clean_api_url:
+        config["api_url"] = clean_api_url
+    if clean_web_url:
+        config["web_url"] = clean_web_url
     if app_id:
         config["app_id"] = app_id
 
@@ -217,49 +302,23 @@ def init(
         config_file.write_text(json.dumps(config, indent=4) + "\n", encoding="utf-8")
         console.print(f"[green]✓[/green] Created {config_file.name}")
 
-    # 3. Sync PlatformContext stubs
-    update_local_stubs(target_path)
+    # 2. Ensure .valstorm/ is gitignored
+    _ensure_gitignore_entry(target_path, ".valstorm/")
 
-    # 4. Write concise workspace README & AI guide
-    readme_file = target_path / "README.md"
-    if not readme_file.exists():
-        readme_file.write_text(
-            f"# {target_path.name}\n\n"
-            "Open Valstorm workspace.\n\n"
-            "## Quick Start\n\n"
-            "```bash\n"
-            "valstorm login\n"
-            "valstorm pull\n"
-            "valstorm schema status\n"
-            "valstorm fn validate function/my_fn.py\n"
-            "valstorm push --dry-run\n"
-            "```\n",
-            encoding="utf-8",
-        )
+    # 3. Create canonical api_name directories (unless --minimal)
+    if not minimal:
+        for folder in ["schemas", *STANDARD_OBJECTS]:
+            (target_path / folder).mkdir(exist_ok=True)
 
-    ai_guide = (
-        "# Open Valstorm Workspace Guide\n\n"
-        "## Core CLI Commands\n"
-        "- `valstorm pull [--schemas-only] [--type function]` — Pull metadata & schemas in one roundtrip.\n"
-        "- `valstorm push [--dry-run] [--diff origin/main]` — Push local changes in a single ACID transaction.\n"
-        "- `valstorm schema list | get | status | sync` — Inspect schemas and sync native PostgreSQL migrations.\n"
-        "- `valstorm sql \"SELECT id, name FROM contact LIMIT 10\"` — Query data (raw IDs by default; pass `--hydrate` for `{id, name}`).\n"
-        "- `valstorm graphql \"{ contact(limit: 5) { id name } }\"` — Run GraphQL queries (raw IDs by default; pass `--hydrate` for `{id, name}`).\n"
-        "- `valstorm fn validate <file.py>` / `valstorm fn run <target>` — AST-validate and execute serverless functions.\n"
-        "- `valstorm rpc list` / `valstorm rpc call <target>` — Discover and invoke PlatformContext and plugin methods.\n"
-        "- `valstorm app list | install | deploy | promote | publish` — Manage Valstorm apps.\n"
-        "- `valstorm vfs ls | upload | download | mv | rm | info | index` — Manage VFS vaults and files.\n"
-    )
-    for guide_name in ("CLAUDE.md", "GEMINI.md"):
-        guide_file = target_path / guide_name
-        if not guide_file.exists():
-            guide_file.write_text(ai_guide, encoding="utf-8")
+    # 4. Opt-in AI/MCP config
+    if ai:
+        _write_optional_ai_files(target_path, env=env.lower(), profile=profile.lower(), api_url=clean_api_url)
 
-    # 5. Optional AI IDE configs
-    if not skip_ai_configs:
-        _write_ai_configs(target_path, env=env.lower(), profile=profile.lower())
-
-    console.print(f"\n[bold green]✓ Open Valstorm workspace initialized at {target_path.resolve()}[/bold green]")
+    console.print(f"\n[bold green]✓ Open Valstorm org workspace initialized at {target_path.resolve()}[/bold green]")
+    if name:
+        console.print(f"Next: [cyan]cd {name} && valstorm pull[/cyan]")
+    else:
+        console.print("Next: [cyan]valstorm pull[/cyan]")
 
 
 def _get_version() -> str:

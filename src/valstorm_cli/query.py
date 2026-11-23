@@ -7,7 +7,7 @@ import typer
 from rich.console import Console
 from valstorm import ValstormClient, ValstormError
 
-from .auth import requires_auth
+from .auth import find_project_root, requires_auth
 
 console = Console()
 query_app = typer.Typer(help="Execute SQL or GraphQL queries against Valstorm.")
@@ -103,7 +103,8 @@ def get_query_string(query: Optional[str], file: Optional[str], default_ext: str
     if file:
         p = Path(file)
         if not p.exists():
-            p_queries = Path("queries") / file
+            root = find_project_root() or Path.cwd()
+            p_queries = root / "queries" / file
             if p_queries.exists():
                 p = p_queries
             else:
@@ -121,7 +122,8 @@ def save_query_to_file(query_str: str, save_path: str, default_ext: str):
     if not p.suffix:
         p = p.with_suffix(default_ext)
     if p.parent == Path("."):
-        queries_dir = Path("queries")
+        root = find_project_root() or Path.cwd()
+        queries_dir = root / "queries"
         queries_dir.mkdir(exist_ok=True)
         p = queries_dir / p
     else:
