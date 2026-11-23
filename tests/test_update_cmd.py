@@ -3,7 +3,6 @@
 from pathlib import Path
 import re
 import subprocess
-import pytest
 
 from valstorm_cli import main as cli_main
 
@@ -13,17 +12,18 @@ PYPROJECT_PATH = CLI_ROOT / "pyproject.toml"
 
 
 def test_cli_pyproject_declares_git_urls_for_internal_packages():
-    """Ensure valstorm-client and valstorm-mcp-server have public GitHub URLs for external users."""
+    """Ensure valstorm-client is a core dep and valstorm-mcp-server is an optional [mcp] extra."""
     content = PYPROJECT_PATH.read_text()
     stripped = re.sub(r"(?ms)\n\[tool\.uv\.sources\].*?(?=\n\[|\Z)", "", content)
 
-    assert "valstorm-mcp-server @ git+https://github.com/Valstorm-Corp/valstorm-mcp.git" in stripped
     assert "valstorm-client @ git+https://github.com/Valstorm-Corp/valstorm-client-python.git" in stripped
+    assert "[project.optional-dependencies]" in stripped
+    assert "valstorm-mcp-server @ git+https://github.com/Valstorm-Corp/valstorm-mcp.git" in stripped
     assert "allow-direct-references = true" in stripped
 
 
 def test_cli_update_uv_tool_upgrade_fallback_on_failure(monkeypatch):
-    """When uv tool upgrade valstorm-cli fails, falls back to uv tool install --from public git with --with deps."""
+    """When uv tool upgrade valstorm-cli fails, falls back to uv tool install --from public git."""
     monkeypatch.setattr(cli_main, "__file__", "/Users/test/.local/share/uv/tools/valstorm-cli/lib/python3.12/site-packages/valstorm_cli/main.py")
     monkeypatch.setattr(cli_main.sys, "executable", "/Users/test/.local/share/uv/tools/valstorm-cli/bin/python")
     monkeypatch.setattr(cli_main.shutil, "which", lambda cmd: "/usr/local/bin/uv" if cmd == "uv" else None)
@@ -45,7 +45,7 @@ def test_cli_update_uv_tool_upgrade_fallback_on_failure(monkeypatch):
     assert fallback_cmd[:3] == ["uv", "tool", "install"]
     assert "git+https://github.com/Valstorm-Corp/valstorm-cli.git" in fallback_cmd
     assert "git+https://github.com/Valstorm-Corp/valstorm-client-python.git" in fallback_cmd
-    assert "git+https://github.com/Valstorm-Corp/valstorm-mcp.git" in fallback_cmd
+    assert "git+https://github.com/Valstorm-Corp/valstorm-mcp.git" not in fallback_cmd
     assert "--force" in fallback_cmd
     assert "--upgrade" in fallback_cmd
 
@@ -69,5 +69,5 @@ def test_cli_update_pip_fallback_uses_public_repos(monkeypatch):
     cmd_str = " ".join(calls[0])
     assert "monorepo.git" not in cmd_str
     assert "git+https://github.com/Valstorm-Corp/valstorm-client-python.git" in calls[0]
-    assert "git+https://github.com/Valstorm-Corp/valstorm-mcp.git" in calls[0]
     assert "git+https://github.com/Valstorm-Corp/valstorm-cli.git" in calls[0]
+    assert "git+https://github.com/Valstorm-Corp/valstorm-mcp.git" not in calls[0]

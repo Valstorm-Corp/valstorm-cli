@@ -1,10 +1,8 @@
 import json
-import os
-import re
+import mimetypes
 import sys
-import time
 from pathlib import Path
-from typing import List, NoReturn, Optional
+from typing import List, Optional
 
 import httpx
 import typer
@@ -14,909 +12,377 @@ from rich.tree import Tree
 
 from .auth import requires_auth
 
-vfs_app = typer.Typer(help="Manage the Virtual File System (VFS)", no_args_is_help=True)
 console = Console()
+vfs_app = typer.Typer(help="Manage files and vaults in the Valstorm Virtual File Service (VFS).")
 
 
-def handle_error(response: httpx.Response, json_output: bool):
-    """Handles error reporting uniformly for VFS commands."""
-    if response.status_code >= 400:
-        try:
-            error_text = response.text
-        except httpx.ResponseNotRead:
-            response.read()
-            error_text = response.text
-
-        try:
-            parsed_error = response.json()
-        except Exception:
-            parsed_error = error_text
-
-        if json_output:
-            print(json.dumps({"error": parsed_error, "status_code": response.status_code}))
-        else:
-            console.print(f"[bold red]API Error ({response.status_code}):[/bold red] {error_text}")
-
-        if response.status_code in (401, 403):
-            sys.exit(3)
-        elif response.status_code == 404:
-            sys.exit(4)
-        else:
-            sys.exit(2)
+def _human_size(num_bytes: int) -> str:
+    size = float(num_bytes or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024.0:
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024.0
+    return f"{size:.1f} PB"
 
 
-def handle_network_error(e: Exception, json_output: bool) -> NoReturn:
-    """Handles network/request errors uniform reporting."""
+def handle_error(res: httpx.Response, json_output: bool = False, action: str = "Request") -> None:
+    if res.status_code < 400:
+        return
+    code = 1
+    if res.status_code in (401, 403):
+        code = 3
+    elif res.status_code == 404:
+        code = 4
+    try:
+        detail = res.json().get("detail", res.text)
+    except Exception:
+        detail = res.text
     if json_output:
-        print(json.dumps({"error": str(e), "status_code": 2}))
+        print(json.dumps({"error": action, "status_code": res.status_code, "detail": detail}, indent=2), file=sys.stderr)
     else:
-        console.print(f"[bold red]Network Error:[/bold red] {e}")
-    sys.exit(2)
+        console.print(f"[bold red]{action} failed ({res.status_code}):[/bold red] {detail}")
+    raise typer.Exit(code)
 
 
-def handle_local_error(message: str, json_output: bool, exit_code: int = 1) -> NoReturn:
-    """Handles local CLI validation errors uniform reporting."""
+def handle_network_error(err: Exception, json_output: bool = False) -> None:
     if json_output:
-        print(json.dumps({"error": message, "status_code": exit_code}))
+        print(json.dumps({"error": "Network error", "detail": str(err)}, indent=2), file=sys.stderr)
+    else:
+        console.print(f"[bold red]Network error:[/bold red] {err}")
+    raise typer.Exit(2)
+
+
+def handle_local_error(message: str, json_output: bool = False, exit_code: int = 1) -> None:
+    if json_output:
+        print(json.dumps({"error": message}, indent=2), file=sys.stderr)
     else:
         console.print(f"[bold red]Error:[/bold red] {message}")
-    sys.exit(exit_code)
+    raise typer.Exit(exit_code)
 
 
-@vfs_app.command("list")
+def _handle_error(res: httpx.Response, json_output: bool, action: str) -> None:
+    handle_error(res, json_output=json_output, action=action)
+
+
+def _add_tree_nodes(tree_node: Tree, vaults: list) -> None:
+    for v in vaults:
+        if not isinstance(v, dict):
+            continue
+        vid = v.get("id", "")
+        vname = v.get("name", "Unnamed")
+        branch = tree_node.add(f"[bold cyan]{vname}[/bold cyan] [dim]({vid})[/dim]")
+        children = v.get("children") or v.get("vaults") or []
+        if children:
+            _add_tree_nodes(branch, children)
+
+
+@vfs_app.command("ls")
 @requires_auth
-def vfs_list(
-    vault_id: Optional[str] = typer.Argument(None, help="Vault ID, Vault Name, or String Path (e.g. /Marketing/Assets)"),
-    bypass_cache: bool = typer.Option(False, "--bypass-cache", help="Bypass cache and query fresh data"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON instead of a formatted table"),
+def vfs_ls(
+    target: Optional[str] = typer.Argument(
+        None,
+        help="Optional vault ID (vaul_...) or slash path (e.g. Finance/2026). Omit to list full vault tree.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
     client: httpx.Client = None,  # type: ignore
 ):
-    """List files and directories in a given vault or path."""
-    params = {"bypass_cache": "true" if bypass_cache else "false"}
-
-    if not vault_id:
-        try:
-            res = client.get("/vfs/tree", params=params)
-            handle_error(res, json_output)
-            data = res.json()
-        except httpx.RequestError as e:
-            handle_network_error(e, json_output)
-
+    """
+    List vaults and files. Accepts a vault ID, a human path (e.g. `Finance/2026`), or no argument for the full vault tree.
+    """
+    if not target:
+        res = client.get("/vfs/tree", timeout=30.0)
+        if res.status_code != 200:
+            _handle_error(res, json_output, "List VFS tree")
+        data = res.json()
         if json_output:
             print(json.dumps(data, indent=2))
             return
 
-        console.print("\n[bold]Virtual File System (VFS) Vault Tree[/bold]\n")
-
-        vaults = data.get("vaults", [])
-        vaults_by_id = {v["id"]: v for v in vaults if isinstance(v, dict) and "id" in v}
-        children_map = {}
-        roots = []
-        for v in vaults:
-            if not isinstance(v, dict):
-                continue
-            pid = v.get("parent_vault")
-            if not pid or pid not in vaults_by_id:
-                roots.append(v)
-            else:
-                children_map.setdefault(pid, []).append(v)
-
-        def add_node(tree_node, vault):
-            v_name = vault.get("name", "Unknown")
-            v_id = vault.get("id", "")
-            paths = vault.get("vault_paths", [])
-            path_str = f" ({paths[0]})" if paths else ""
-            node = tree_node.add(f"[cyan]📁 {v_name}[/cyan] [dim]{v_id}[/dim]{path_str}")
-            for child in children_map.get(v_id, []):
-                add_node(node, child)
-
-        tree = Tree("Root")
-        for root in roots:
-            add_node(tree, root)
-
+        # Open Valstorm returns a list[dict]; legacy returned {"vaults": [...]}
+        vaults = data if isinstance(data, list) else data.get("vaults", [])
+        if not vaults:
+            console.print("[yellow]No vaults found.[/yellow]")
+            return
+        tree = Tree("[bold]VFS Vaults[/bold]")
+        _add_tree_nodes(tree, vaults)
         console.print(tree)
         return
 
-    try:
-        if vault_id.startswith("/"):
-            clean_path = vault_id.lstrip("/")
-            res = client.get(f"/vfs/path/{clean_path}", params=params)
-        else:
-            res = client.get(f"/vfs/vault/{vault_id}", params=params)
-        handle_error(res, json_output)
+    # Resolve path vs vault ID
+    if target.startswith("vaul_") or target == "root":
+        res = client.get(f"/vfs/vault/{target}", timeout=30.0)
+        if res.status_code != 200:
+            _handle_error(res, json_output, f"Inspect vault '{target}'")
         data = res.json()
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
-
-    if json_output:
-        print(json.dumps(data, indent=2))
-        return
-
-    display_id = data.get("vault_id", vault_id)
-    console.print(f"\n[bold]Contents of Vault/Path:[/bold] {display_id}\n")
-
-    table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Type", style="dim")
-    table.add_column("Name")
-    table.add_column("ID", style="cyan")
-
-    for folder in data.get("folders", []):
-        table.add_row("Directory", folder.get("name", "Unknown"), folder.get("id", ""))
-
-    for f in data.get("files", []):
-        table.add_row("File", f.get("name", "Unknown"), f.get("id", ""))
-
-    console.print(table)
-
-
-@vfs_app.command("resolve")
-@requires_auth
-def vfs_resolve(
-    path: str = typer.Argument(..., help="String path e.g. /Marketing/Assets/logo.png"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
-    client: httpx.Client = None,  # type: ignore
-):
-    """Resolves a string path to its VFS entity (Vault or File metadata)."""
-    clean_path = path.lstrip("/")
-    try:
-        res = client.get(f"/vfs/path/{clean_path}")
-        handle_error(res, json_output)
-        data = res.json()
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
-
-    if json_output:
-        print(json.dumps(data, indent=2))
-        return
-
-    console.print(f"\n[bold]Resolved Path:[/bold] {path}\n")
-    if isinstance(data, dict):
-        if "folders" in data or "files" in data:
-            table = Table(show_header=True, header_style="bold magenta")
-            table.add_column("Type", style="dim")
-            table.add_column("Name")
-            table.add_column("ID", style="cyan")
-
-            for folder in data.get("folders", []):
-                table.add_row("Directory", folder.get("name", "Unknown"), folder.get("id", ""))
-
-            for f in data.get("files", []):
-                table.add_row("File", f.get("name", "Unknown"), f.get("id", ""))
-
-            console.print(table)
-        else:
-            for k, v in data.items():
-                console.print(f"[bold]{k}:[/bold] {v}")
     else:
-        console.print(data)
-
-
-@vfs_app.command("snapshot")
-@requires_auth
-def vfs_snapshot(
-    bypass_cache: bool = typer.Option(False, "--bypass-cache", help="Force rebuild of snapshot"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
-    client: httpx.Client = None,  # type: ignore
-):
-    """Download and display the entire VFS tree snapshot instantly."""
-    start_time = time.time()
-    params = {"bypass_cache": "true" if bypass_cache else "false"}
-    try:
-        res = client.get("/vfs/snapshot", params=params)
-        handle_error(res, json_output)
+        res = client.get("/vfs/resolve", params={"path": target}, timeout=30.0)
+        if res.status_code != 200:
+            _handle_error(res, json_output, f"Resolve path '{target}'")
         data = res.json()
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
-
-    elapsed = time.time() - start_time
 
     if json_output:
         print(json.dumps(data, indent=2))
         return
 
-    vaults = data.get("vaults", [])
-    files = data.get("files", [])
+    child_vaults = data.get("vaults") or data.get("children") or []
+    files = data.get("files") or []
+    if not child_vaults and not files:
+        # Single file resolved via path
+        if data.get("id"):
+            console.print(json.dumps(data, indent=2))
+            return
+        console.print(f"[yellow]Vault '{target}' is empty.[/yellow]")
+        return
 
-    vaults_map = {v["id"]: v for v in vaults if isinstance(v, dict) and "id" in v}
-    vault_children = {}
-    roots = []
-    for v in vaults:
-        if not isinstance(v, dict):
-            continue
-        pid = v.get("parent_vault")
-        if not pid or pid not in vaults_map:
-            roots.append(v)
-        else:
-            vault_children.setdefault(pid, []).append(v)
+    table = Table(title=f"VFS: {data.get('name') or target}")
+    table.add_column("Type", style="magenta", width=7)
+    table.add_column("ID", style="dim")
+    table.add_column("Name", style="cyan")
+    table.add_column("Size", justify="right", style="green")
 
-    vault_files = {}
-    unassigned_files = []
+    for v in child_vaults:
+        if isinstance(v, dict):
+            table.add_row("vault", str(v.get("id", "")), str(v.get("name", "")), "-")
     for f in files:
-        if not isinstance(f, dict):
-            continue
-        v_list = f.get("vaults")
-        if not v_list and f.get("parent_vault"):
-            v_list = [f.get("parent_vault")]
-        if v_list and isinstance(v_list, list):
-            for vid in v_list:
-                vault_files.setdefault(vid, []).append(f)
-        else:
-            unassigned_files.append(f)
-
-    tree = Tree("[bold cyan]Virtual File System Snapshot[/bold cyan]")
-
-    def render_vault(node, vault):
-        v_id = vault.get("id", "")
-        v_name = vault.get("name", "Unknown Vault")
-        v_paths = vault.get("vault_paths", [])
-        path_str = f" [dim]({v_paths[0]})[/dim]" if v_paths else ""
-        vault_node = node.add(f"[cyan]📁 {v_name}[/cyan] [dim]({v_id})[/dim]{path_str}")
-
-        for f in vault_files.get(v_id, []):
-            f_name = f.get("name", "Unknown File")
-            f_id = f.get("id", "")
-            vault_node.add(f"[green]📄 {f_name}[/green] [dim]({f_id})[/dim]")
-
-        for child in vault_children.get(v_id, []):
-            render_vault(vault_node, child)
-
-    for root in roots:
-        render_vault(tree, root)
-
-    if unassigned_files:
-        unassigned_node = tree.add("[yellow]Unassigned Files[/yellow]")
-        for f in unassigned_files:
-            unassigned_node.add(f"[green]📄 {f.get('name', 'Unknown')}[/green] [dim]({f.get('id', '')})[/dim]")
-
-    console.print(tree)
-    console.print(f"\n[dim]Fetched {len(vaults)} vaults and {len(files)} files in {elapsed:.2f}s[/dim]")
-
-
-@vfs_app.command("batch-vaults")
-@requires_auth
-def vfs_batch_vaults(
-    vault_ids: List[str] = typer.Argument(..., help="Multiple Vault IDs to fetch"),
-    bypass_cache: bool = typer.Option(False, "--bypass-cache", help="Bypass cache"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
-    client: httpx.Client = None,  # type: ignore
-):
-    """Fetch contents of multiple vaults in a single request."""
-    payload = {
-        "vault_ids": vault_ids,
-        "bypass_cache": bypass_cache,
-    }
-    try:
-        res = client.post("/vfs/vaults/batch", json=payload)
-        handle_error(res, json_output)
-        data = res.json()
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
-
-    failed_count = sum(1 for vid, content in data.items() if isinstance(content, dict) and "error" in content)
-
-    if json_output:
-        print(json.dumps(data, indent=2))
-        if failed_count > 0:
-            sys.exit(5)
-        return
-
-    for vid, content in data.items():
-        console.print(f"\n[bold magenta]Vault ID:[/bold magenta] [cyan]{vid}[/cyan]")
-        if isinstance(content, dict) and "error" in content:
-            console.print(f"[bold red]Error:[/bold red] {content['error']}")
-            continue
-
-        table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("Type", style="dim")
-        table.add_column("Name")
-        table.add_column("ID", style="cyan")
-
-        for folder in content.get("folders", []):
-            table.add_row("Directory", folder.get("name", "Unknown"), folder.get("id", ""))
-
-        for f in content.get("files", []):
-            table.add_row("File", f.get("name", "Unknown"), f.get("id", ""))
-
-        console.print(table)
-
-    if failed_count > 0:
-        sys.exit(5)
-
-
-@vfs_app.command("batch-move")
-@requires_auth
-def vfs_batch_move(
-    items: List[str] = typer.Argument(..., help="List of Item IDs (file_xxx or vaul_xxx) to move"),
-    to_vault_id: str = typer.Option(..., "--to", help="Destination Vault ID"),
-    from_vault_id: Optional[str] = typer.Option(None, "--from", help="Optional source Vault ID to remove from"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
-    client: httpx.Client = None,  # type: ignore
-):
-    """Move multiple items into a destination vault simultaneously."""
-    payload = {
-        "items": [
-            {
-                "item_id": item,
-                "from_vault_id": from_vault_id,
-                "to_vault_id": to_vault_id,
-            }
-            for item in items
-        ]
-    }
-    try:
-        res = client.post("/vfs/batch-move", json=payload)
-        handle_error(res, json_output)
-        data = res.json()
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
-
-    results = data.get("results", [])
-    failed_items = [r for r in results if r.get("status") != "success"]
-
-    if json_output:
-        print(json.dumps(data, indent=2))
-        if failed_items:
-            sys.exit(5)
-        return
-
-    table = Table(title="Batch Move Results", show_header=True, header_style="bold magenta")
-    table.add_column("Item ID", style="cyan")
-    table.add_column("Status")
-    table.add_column("Message")
-
-    for r in results:
-        status = r.get("status", "unknown")
-        item_id = r.get("item_id", "")
-        if status == "success":
-            status_str = "[green]Success[/green]"
-            msg = f"Moved to {to_vault_id}"
-        else:
-            status_str = "[red]Error[/red]"
-            msg = r.get("error", "Failed to move")
-        table.add_row(item_id, status_str, msg)
-
-    console.print(table)
-
-    if failed_items:
-        sys.exit(5)
-
-
-@vfs_app.command("query")
-@requires_auth
-def vfs_query(
-    query: str = typer.Option(..., "--query", help="SQL query string to search VFS metadata"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON instead of a formatted table"),
-    client: httpx.Client = None,  # type: ignore
-):
-    """Query VFS metadata using a SQL-like syntax."""
-    payload = {"query": query}
-
-    try:
-        res = client.post("/vfs/query", json=payload)
-        handle_error(res, json_output)
-        data = res.json()
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
-
-    if json_output:
-        print(json.dumps(data, indent=2))
-        return
-
-    if not data:
-        console.print("[yellow]No results found.[/yellow]")
-        return
-
-    console.print("\n[bold]Query Results:[/bold]\n")
-
-    table = Table(show_header=True, header_style="bold magenta")
-    if data and isinstance(data, list) and len(data) > 0:
-        keys = list(data[0].keys())
-        for k in keys[:5]:  # Cap columns to prevent terminal explosion
-            table.add_column(k)
-
-        for row in data:
-            row_data = [str(row.get(k, "")) for k in keys[:5]]
-            table.add_row(*row_data)
-
-    console.print(table)
-
-
-@vfs_app.command("move")
-@requires_auth
-def vfs_move(
-    item_id: str = typer.Argument(..., help="The ID of the file or vault to move"),
-    from_vault_id: str = typer.Option(..., "--from", help="The ID of the source vault"),
-    to_vault_id: str = typer.Option(..., "--to", help="The ID of the destination vault"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON instead of a message"),
-    client: httpx.Client = None,  # type: ignore
-):
-    """Move an item (vault or file) from one vault to another."""
-    payload = {
-        "item_id": item_id,
-        "from_vault_id": from_vault_id,
-        "to_vault_id": to_vault_id,
-    }
-
-    try:
-        res = client.post("/vfs/move", json=payload)
-        handle_error(res, json_output)
-        data = res.json()
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
-
-    if json_output:
-        print(json.dumps(data, indent=2))
-        return
-
-    console.print(f"[green]Successfully moved item {item_id} to vault {to_vault_id}[/green]")
-
-
-@vfs_app.command("rebuild-cache")
-@requires_auth
-def vfs_rebuild_cache(
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON response"),
-    client: httpx.Client = None,  # type: ignore
-):
-    """Rebuild the Virtual File System (VFS) cache from the source of truth."""
-    if json_output:
-        try:
-            res = client.post("/vfs/cache/rebuild")
-            handle_error(res, json_output)
-            data = res.json()
-        except httpx.RequestError as e:
-            handle_network_error(e, json_output)
-        print(json.dumps(data, indent=2))
-        return
-
-    with console.status("[bold cyan]Rebuilding VFS cache...[/bold cyan]"):
-        try:
-            res = client.post("/vfs/cache/rebuild")
-            handle_error(res, json_output)
-            data = res.json()
-        except httpx.RequestError as e:
-            handle_network_error(e, json_output)
-
-    msg = data.get("message", "VFS cache rebuilt successfully.") if isinstance(data, dict) else "VFS cache rebuilt successfully."
-    console.print(f"[green]{msg}[/green]")
-
-
-@vfs_app.command("upload")
-@requires_auth
-def vfs_upload(
-    local_path: Path = typer.Argument(..., exists=True, help="Local file or directory path"),
-    to_vault_id: str = typer.Option(..., "--to", help="Target VFS Vault ID"),
-    recursive: bool = typer.Option(False, "-r", "--recursive", help="Upload directory recursively"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON instead of a message"),
-    client: httpx.Client = None,  # type: ignore
-):
-    """Upload a file or directory to VFS/S3."""
-    if local_path.is_dir():
-        if not recursive:
-            handle_local_error(
-                f"'{local_path}' is a directory. Use -r / --recursive to upload recursively.",
-                json_output,
-                exit_code=1,
+        if isinstance(f, dict):
+            table.add_row(
+                "file",
+                str(f.get("id", "")),
+                str(f.get("name") or f.get("file_name") or ""),
+                _human_size(int(f.get("size_bytes") or f.get("size") or 0)),
             )
-
-        uploaded_files = []
-        dir_vault_map = {str(local_path): to_vault_id}
-
-        for root, dirs, files in os.walk(local_path):
-            current_vault_id = dir_vault_map[root]
-
-            # Ensure subdirectories exist as vaults
-            if dirs:
-                try:
-                    res = client.get(f"/vfs/vault/{current_vault_id}")
-                    handle_error(res, json_output)
-                    existing_folders = {f["name"]: f["id"] for f in res.json().get("folders", []) if isinstance(f, dict)}
-                except httpx.RequestError as e:
-                    handle_network_error(e, json_output)
-
-                for d in dirs:
-                    sub_path = os.path.join(root, d)
-                    if d in existing_folders:
-                        dir_vault_map[sub_path] = existing_folders[d]
-                    else:
-                        try:
-                            v_res = client.post("/object/vault", json=[{"name": d, "parent_vault": current_vault_id}])
-                            handle_error(v_res, json_output)
-                            v_data = v_res.json()
-                            new_id = v_data[0]["id"] if isinstance(v_data, list) and len(v_data) > 0 else v_data.get("id")
-                            dir_vault_map[sub_path] = new_id
-                        except httpx.RequestError as e:
-                            handle_network_error(e, json_output)
-
-            # Upload files in current directory
-            for f in files:
-                f_path = os.path.join(root, f)
-                try:
-                    with open(f_path, "rb") as fp:
-                        res = client.post(
-                            "/vfs/upload",
-                            data={"vault_id": current_vault_id},
-                            files={"file": (f, fp, "application/octet-stream")},
-                        )
-                        handle_error(res, json_output)
-                        f_data = res.json()
-                        uploaded_files.append({
-                            "local_path": f_path,
-                            "vault_id": current_vault_id,
-                            "response": f_data,
-                        })
-                except httpx.RequestError as e:
-                    handle_network_error(e, json_output)
-
-        out_payload = {"uploaded": uploaded_files, "total": len(uploaded_files)}
-        if json_output:
-            print(json.dumps(out_payload, indent=2))
-            return
-
-        console.print(f"[green]Successfully recursively uploaded directory [bold]{local_path}[/bold] ({len(uploaded_files)} file(s)) to vault [bold]{to_vault_id}[/bold][/green]")
-        return
-
-    # Single file upload
-    try:
-        with open(local_path, "rb") as f:
-            res = client.post(
-                "/vfs/upload",
-                data={"vault_id": to_vault_id},
-                files={"file": (local_path.name, f, "application/octet-stream")},
-            )
-            handle_error(res, json_output)
-            response_data = res.json()
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
-
-    if json_output:
-        print(json.dumps(response_data, indent=2))
-        return
-
-    console.print(f"[green]Successfully uploaded [bold]{local_path.name}[/bold] to vault [bold]{to_vault_id}[/bold][/green]")
-    if response_data.get("id"):
-        console.print(f"File ID: [cyan]{response_data.get('id')}[/cyan]")
-
-
-@vfs_app.command("download")
-@requires_auth
-def vfs_download(
-    item_id: str = typer.Argument(..., help="File ID or Vault ID to download"),
-    dest_path: Path = typer.Option(Path("."), "--dest", "-d", help="Local destination directory"),
-    recursive: bool = typer.Option(False, "-r", "--recursive", help="Download a vault recursively"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
-    client: httpx.Client = None,  # type: ignore
-):
-    """Download a file or vault from VFS to local disk."""
-    is_vault = item_id.startswith("vaul_")
-    if not is_vault:
-        try:
-            check_res = client.get(f"/vfs/vault/{item_id}")
-            if check_res.status_code == 200 and "folders" in check_res.json():
-                is_vault = True
-        except Exception:
-            pass
-
-    if is_vault:
-        if not recursive:
-            handle_local_error(
-                f"'{item_id}' is a vault. Use -r / --recursive to download recursively.",
-                json_output,
-                exit_code=1,
-            )
-
-        downloaded_files = []
-
-        def download_vault_recursively(v_id: str, local_dir: Path):
-            local_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                res = client.get(f"/vfs/vault/{v_id}")
-                handle_error(res, json_output)
-                v_data = res.json()
-            except httpx.RequestError as e:
-                handle_network_error(e, json_output)
-
-            # Download files
-            for file_rec in v_data.get("files", []):
-                f_id = file_rec.get("id")
-                f_name = file_rec.get("name") or f"downloaded_{f_id}"
-                out_file = local_dir / f_name
-                try:
-                    with client.stream("GET", f"/vfs/download/{f_id}") as stream_res:
-                        handle_error(stream_res, json_output)
-                        with open(out_file, "wb") as fp:
-                            for chunk in stream_res.iter_bytes(chunk_size=8192):
-                                fp.write(chunk)
-                        downloaded_files.append({"id": f_id, "local_path": str(out_file)})
-                except httpx.RequestError as e:
-                    handle_network_error(e, json_output)
-
-            # Recursively download folders
-            for folder_rec in v_data.get("folders", []):
-                child_v_id = folder_rec.get("id")
-                child_v_name = folder_rec.get("name", child_v_id)
-                download_vault_recursively(child_v_id, local_dir / child_v_name)
-
-        download_vault_recursively(item_id, dest_path)
-
-        out_payload = {"downloaded": downloaded_files, "total": len(downloaded_files)}
-        if json_output:
-            print(json.dumps(out_payload, indent=2))
-            return
-
-        console.print(f"[green]Successfully downloaded vault [bold]{item_id}[/bold] ({len(downloaded_files)} file(s)) to [bold]{dest_path}[/bold][/green]")
-        return
-
-    # Single file download
-    try:
-        with client.stream("GET", f"/vfs/download/{item_id}") as res:
-            handle_error(res, json_output)
-
-            filename = f"downloaded_{item_id}"
-            cd = res.headers.get("content-disposition")
-            if cd:
-                match = re.search(r'filename="?([^"]+)"?', cd)
-                if match:
-                    filename = match.group(1)
-
-            if dest_path.is_dir():
-                out_path = dest_path / filename
-            else:
-                out_path = dest_path
-
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(out_path, "wb") as f:
-                for chunk in res.iter_bytes(chunk_size=8192):
-                    f.write(chunk)
-
-            if json_output:
-                print(json.dumps({"status": "success", "file_id": item_id, "saved_to": str(out_path)}, indent=2))
-                return
-
-            console.print(f"[green]Successfully downloaded to [bold]{out_path}[/bold][/green]")
-
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
-
-
-@vfs_app.command("delete")
-@requires_auth
-def vfs_delete(
-    item_ids: List[str] = typer.Argument(..., help="Vault or File IDs to delete"),
-    force: bool = typer.Option(False, "-f", "--force", help="Skip confirmation prompt"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON instead of a message"),
-    client: httpx.Client = None,  # type: ignore
-):
-    """Delete files or vaults from VFS."""
-    if not force and not json_output:
-        confirm = typer.confirm(f"Are you sure you want to delete {len(item_ids)} item(s)?")
-        if not confirm:
-            handle_local_error("Deletion cancelled.", json_output=False, exit_code=1)
-
-    results = []
-    failed_count = 0
-
-    for item_id in item_ids:
-        try:
-            res = client.delete(f"/vfs/{item_id}")
-            if res.status_code >= 400:
-                failed_count += 1
-                results.append({
-                    "item_id": item_id,
-                    "status": "error",
-                    "status_code": res.status_code,
-                    "error": res.text,
-                })
-            else:
-                data = res.json() if res.status_code != 204 and res.text else {"message": "success"}
-                results.append({
-                    "item_id": item_id,
-                    "status": "success",
-                    "data": data,
-                })
-        except httpx.RequestError as e:
-            failed_count += 1
-            results.append({
-                "item_id": item_id,
-                "status": "error",
-                "error": str(e),
-            })
-
-    output_data = {
-        "results": results,
-        "deleted_count": len(item_ids) - failed_count,
-        "failed_count": failed_count,
-    }
-
-    if json_output:
-        print(json.dumps(output_data, indent=2))
-        if failed_count > 0:
-            sys.exit(5 if failed_count < len(item_ids) else 2)
-        return
-
-    table = Table(title="Deletion Results", show_header=True, header_style="bold magenta")
-    table.add_column("Item ID", style="cyan")
-    table.add_column("Status")
-    table.add_column("Details")
-
-    for r in results:
-        status_str = "[green]Success[/green]" if r["status"] == "success" else "[red]Error[/red]"
-        details = "Deleted" if r["status"] == "success" else r.get("error", "Failed")
-        table.add_row(r["item_id"], status_str, details)
-
     console.print(table)
-
-    if failed_count > 0:
-        sys.exit(5 if failed_count < len(item_ids) else 2)
 
 
 @vfs_app.command("info")
 @requires_auth
 def vfs_info(
-    item_id: str = typer.Argument(..., help="File ID or Vault ID to inspect"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
+    file_id: str = typer.Argument(..., help="File ID (e.g., file_123)."),
+    versions: bool = typer.Option(False, "--versions", help="Also list file snapshot versions."),
+    set_version: Optional[str] = typer.Option(None, "--set-version", help="Promote a specific version ID to active."),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
     client: httpx.Client = None,  # type: ignore
 ):
-    """Retrieve detailed metadata for a file or vault."""
-    try:
-        if item_id.startswith("vaul_"):
-            res = client.get(f"/vfs/vault/{item_id}")
+    """
+    Inspect file metadata, list snapshot versions (`--versions`), or activate a version (`--set-version`).
+    """
+    clean_id = file_id.replace("cloud://", "").strip()
+
+    if set_version:
+        res = client.post(f"/files/{clean_id}/active-version/{set_version}", timeout=30.0)
+        if res.status_code not in (200, 201):
+            _handle_error(res, json_output, "Set active version")
+        if json_output:
+            print(json.dumps(res.json(), indent=2))
         else:
-            res = client.post("/query", json={"query": f"SELECT * FROM file WHERE id = '{item_id}' LIMIT 1"})
-        
-        handle_error(res, json_output)
-        data = res.json()
-        if isinstance(data, list) and len(data) > 0:
-            data = data[0]
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
-
-    if json_output:
-        print(json.dumps(data, indent=2))
+            console.print(f"[bold green]✓ Set active version of '{clean_id}' to '{set_version}'.[/bold green]")
         return
 
-    console.print(f"\n[bold]VFS Metadata Info:[/bold] [cyan]{item_id}[/cyan]\n")
-    if isinstance(data, dict):
-        table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("Property", style="cyan")
-        table.add_column("Value", style="green")
-        for k, v in data.items():
-            if k not in ("folders", "files"):
-                table.add_row(str(k), str(v))
-        console.print(table)
+    res = client.get(f"/vfs/file/{clean_id}", timeout=30.0)
+    if res.status_code != 200:
+        _handle_error(res, json_output, f"Inspect file '{clean_id}'")
+    data = res.json()
+
+    if versions:
+        v_res = client.get(f"/files/{clean_id}/versions", timeout=30.0)
+        if v_res.status_code == 200:
+            data = {"file": data, "versions": v_res.json()}
+
+    print(json.dumps(data, indent=2))
 
 
-@vfs_app.command("versions")
+@vfs_app.command("upload")
 @requires_auth
-def vfs_versions(
-    file_id: str = typer.Argument(..., help="File ID to list revisions for"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
+def vfs_upload(
+    local_path: Path = typer.Argument(..., help="Local file path to upload."),
+    vault: Optional[str] = typer.Option(None, "--vault", "-v", help="Target vault ID (e.g. vaul_123)."),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="Override filename in VFS."),
+    is_public: bool = typer.Option(False, "--public", help="Mark uploaded file as publicly readable."),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
     client: httpx.Client = None,  # type: ignore
 ):
-    """List all historical revisions for a file."""
-    clean_id = file_id.replace("cloud://", "")
-    try:
-        res = client.get(f"/files/{clean_id}/versions")
-        handle_error(res, json_output)
-        data = res.json()
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
+    """
+    Upload a local file into Valstorm VFS.
+    """
+    if not local_path.is_file():
+        console.print(f"[bold red]Error:[/bold red] Local file not found: {local_path}")
+        raise typer.Exit(1)
 
+    upload_name = name or local_path.name
+    content_type = mimetypes.guess_type(upload_name)[0] or "application/octet-stream"
+
+    with open(local_path, "rb") as fh:
+        files_param = {"file": (upload_name, fh, content_type)}
+        form_data = {"is_public": str(is_public).lower()}
+        if vault:
+            form_data["vault_id"] = vault
+        res = client.post("/vfs/upload", files=files_param, data=form_data, timeout=120.0)
+
+    if res.status_code not in (200, 201):
+        _handle_error(res, json_output, "Upload file")
+
+    data = res.json()
     if json_output:
         print(json.dumps(data, indent=2))
         return
 
-    versions = data.get("versions", [])
-    if not versions:
-        console.print(f"[yellow]No revisions found for file '{file_id}'.[/yellow]")
-        return
-
-    console.print(f"\n[bold]Version History for File:[/bold] [cyan]{file_id}[/cyan]\n")
-    table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Version", style="bold cyan")
-    table.add_column("Status", style="green")
-    table.add_column("Version ID", style="dim")
-    table.add_column("Created Date")
-    table.add_column("Size (KB)", justify="right")
-
-    for v in versions:
-        is_active = v.get("is_active", False)
-        status_str = "[bold green]Active (Canon)[/bold green]" if is_active else "[dim]Historical[/dim]"
-        ver_num = f"v{v.get('version_number', 1.0)}"
-        size_kb = f"{(v.get('size', 0) / 1024):.1f}" if v.get("size") else "-"
-        table.add_row(ver_num, status_str, v.get("id", ""), v.get("created_date", ""), size_kb)
-
-    console.print(table)
+    file_id = data.get("id") or data.get("file_id") or ""
+    console.print(f"[bold green]✓ Uploaded '{upload_name}'[/bold green] (ID: [cyan]{file_id}[/cyan])")
 
 
-@vfs_app.command("set-active-version")
+@vfs_app.command("download")
 @requires_auth
-def vfs_set_active_version(
-    file_id: str = typer.Argument(..., help="Target File ID"),
-    version_id: str = typer.Argument(..., help="Version ID (five_...) or Version Number (e.g. 2.0) to activate"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
+def vfs_download(
+    file_id: str = typer.Argument(..., help="File ID to download (e.g., file_123)."),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Destination path (defaults to original filename)."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
     client: httpx.Client = None,  # type: ignore
 ):
-    """Promote a specific file revision as the canonical active version."""
-    clean_id = file_id.replace("cloud://", "")
-    try:
-        res = client.post(f"/files/{clean_id}/active-version/{version_id}")
-        handle_error(res, json_output)
-        data = res.json()
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
+    """
+    Download a file from Valstorm VFS to local disk.
+    """
+    clean_id = file_id.replace("cloud://", "").strip()
+    dest = output
+    if dest is None:
+        meta_res = client.get(f"/vfs/file/{clean_id}", timeout=30.0)
+        if meta_res.status_code == 200:
+            meta = meta_res.json()
+            dest = Path(meta.get("name") or meta.get("file_name") or f"{clean_id}.bin")
+        else:
+            dest = Path(f"{clean_id}.bin")
+
+    res = client.get(f"/vfs/download/{clean_id}", timeout=120.0, follow_redirects=True)
+    if res.status_code != 200:
+        _handle_error(res, False, f"Download '{clean_id}'")
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(res.content)
+    console.print(f"[bold green]✓ Downloaded to {dest}[/bold green] ({_human_size(len(res.content))})")
+
+
+@vfs_app.command("mv")
+@requires_auth
+def vfs_mv(
+    item_ids: List[str] = typer.Argument(..., help="One or more file/vault IDs to move."),
+    to: str = typer.Option(..., "--to", "-t", help="Target parent vault ID (or 'root')."),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
+    client: httpx.Client = None,  # type: ignore
+):
+    """
+    Move one or more files/vaults into a target vault.
+    """
+    target_vault = None if to == "root" else to
+    if len(item_ids) == 1:
+        item_id = item_ids[0].replace("cloud://", "").strip()
+        item_type = "vault" if item_id.startswith("vaul_") else "file"
+        res = client.post(
+            "/vfs/move",
+            json={"item_id": item_id, "item_type": item_type, "target_vault_id": target_vault},
+            timeout=30.0,
+        )
+    else:
+        items_payload = [
+            {
+                "item_id": i.replace("cloud://", "").strip(),
+                "item_type": "vault" if i.startswith("vaul_") else "file",
+                "target_vault_id": target_vault,
+            }
+            for i in item_ids
+        ]
+        res = client.post("/vfs/batch-move", json={"items": items_payload}, timeout=60.0)
+
+    if res.status_code not in (200, 201):
+        _handle_error(res, json_output, "Move VFS item(s)")
 
     if json_output:
-        print(json.dumps(data, indent=2))
+        print(json.dumps(res.json(), indent=2))
         return
+    console.print(f"[bold green]✓ Moved {len(item_ids)} item(s) to '{to}'.[/bold green]")
 
-    console.print(f"[bold green]✓ Successfully set version '{version_id}' as active canon for file '{file_id}'.[/bold green]")
+
+@vfs_app.command("rm")
+@requires_auth
+def vfs_rm(
+    item_ids: List[str] = typer.Argument(..., help="One or more file or vault IDs to delete."),
+    force: bool = typer.Option(False, "--force", "-y", help="Skip confirmation prompt."),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
+    client: httpx.Client = None,  # type: ignore
+):
+    """
+    Delete one or more files or vaults from VFS.
+    """
+    clean_ids = [i.replace("cloud://", "").strip() for i in item_ids]
+    if not force:
+        if not typer.confirm(f"Are you sure you want to delete {len(clean_ids)} VFS item(s)?"):
+            console.print("Operation cancelled.")
+            raise typer.Exit(0)
+
+    if len(clean_ids) == 1:
+        res = client.delete(f"/vfs/item/{clean_ids[0]}", timeout=30.0)
+    else:
+        res = client.post("/vfs/batch-delete", json={"items": clean_ids}, timeout=60.0)
+
+    if res.status_code not in (200, 204):
+        _handle_error(res, json_output, "Delete VFS item(s)")
+
+    if json_output:
+        print(json.dumps({"deleted": clean_ids}, indent=2))
+        return
+    console.print(f"[bold green]✓ Deleted {len(clean_ids)} item(s).[/bold green]")
 
 
 @vfs_app.command("index")
 @requires_auth
 def vfs_index(
-    target: str = typer.Argument(..., help="File ID, Version ID, or VFS Path to index"),
-    force: bool = typer.Option(False, "--force", "-f", help="Force re-indexing even if already indexed"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON response"),
+    file_id: Optional[str] = typer.Argument(None, help="File ID or VFS path (e.g. /Docs/report.pdf) to index (omit if using --vault or --all)."),
+    vault: Optional[str] = typer.Option(None, "--vault", "-v", help="Batch-index all files in a vault ID."),
+    all_files: bool = typer.Option(False, "--all", help="Batch-index all files in the organization."),
+    force: bool = typer.Option(False, "--force", "-f", help="Force re-indexing even if already indexed."),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
     client: httpx.Client = None,  # type: ignore
 ):
-    """Trigger on-demand text extraction and vector indexing for a file."""
-    # Resolve path if target begins with '/'
-    file_id = target
-    if target.startswith("/"):
-        try:
-            resolve_res = client.get("/vfs/resolve", params={"path": target})
-            handle_error(resolve_res, json_output)
-            file_id = resolve_res.json().get("id")
-        except httpx.RequestError as e:
-            handle_network_error(e, json_output)
+    """
+    Index (or re-index with `--force`) a single file/path, a vault, or all organization files for hybrid search.
+    """
+    if file_id:
+        clean_id = file_id.replace("cloud://", "").strip()
+        if "/" in clean_id:
+            res_resolve = client.get("/vfs/resolve", params={"path": clean_id}, timeout=30.0)
+            if res_resolve.status_code != 200:
+                _handle_error(res_resolve, json_output, f"Resolve path '{clean_id}'")
+            resolved = res_resolve.json()
+            clean_id = resolved.get("id") or clean_id
+        res = client.post(f"/vfs/files/{clean_id}/index", json={"force": force}, timeout=60.0)
+    elif vault or all_files:
+        payload = {"force": force}
+        if vault:
+            payload["vault_id"] = vault
+        res = client.post("/vfs/index/batch", json=payload, timeout=120.0)
+    else:
+        console.print("[bold red]Error:[/bold red] Specify a `file_id`, `--vault <id>`, or `--all`.")
+        raise typer.Exit(1)
 
-    try:
-        res = client.post(f"/vfs/files/{file_id}/index", json={"force": force})
-        handle_error(res, json_output)
-        data = res.json()
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
+    if res.status_code not in (200, 201, 202):
+        _handle_error(res, json_output, "Index VFS file(s)")
 
+    data = res.json()
     if json_output:
         print(json.dumps(data, indent=2))
         return
-
-    console.print(f"[bold green]✓[/bold green] Indexing task dispatched for file [cyan]{file_id}[/cyan] (Task: {data.get('task_id')})")
-
-
-@vfs_app.command("reindex")
-@requires_auth
-def vfs_reindex(
-    vault: Optional[str] = typer.Option(None, "--vault", "-v", help="Vault ID or path to reindex"),
-    all_vaults: bool = typer.Option(False, "--all", help="Reindex entire workspace"),
-    limit: int = typer.Option(100, "--limit", "-l", help="Batch size limit"),
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON response"),
-    client: httpx.Client = None,  # type: ignore
-):
-    """Trigger batch backfill indexing across files in a vault or workspace."""
-    if not vault and not all_vaults:
-        handle_local_error("Must specify either --vault <id> or --all to confirm reindexing scope.", json_output)
-
-    payload = {"vault_id": vault, "limit": limit, "all": all_vaults}
-    try:
-        res = client.post("/vfs/index/batch", json=payload)
-        handle_error(res, json_output)
-        data = res.json()
-    except httpx.RequestError as e:
-        handle_network_error(e, json_output)
-
-    if json_output:
-        print(json.dumps(data, indent=2))
-        return
-
-    queued_count = data.get("total_files_queued", 0)
-    console.print(f"[bold green]✓[/bold green] Successfully queued [cyan]{queued_count}[/cyan] files for background indexing.")
-
-
-from .search_cmds import search_command, ask_command
-
-vfs_app.command("search", help="Search files, metadata, and document vector chunks across the workspace.")(search_command)
-vfs_app.command("ask", help="Ask natural language questions grounded in workspace documents with streaming AI answers.")(ask_command)
-
+    if file_id:
+        console.print(f"[bold green]✓ Indexing task dispatched for file {clean_id}.[/bold green]")
+    else:
+        console.print("[bold green]✓ Batch indexing triggered successfully.[/bold green]")

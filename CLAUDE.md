@@ -1,89 +1,30 @@
-# Valstorm CLI — Claude Guide
+# Open Valstorm CLI — Developer Guide
 
-Python CLI tool for developers to manage local Valstorm workspaces, sync metadata, and authenticate.
+Python CLI (`apps/cli`) built with Typer, Rich, `httpx`, and `valstorm-client` (`packages/client-python`) targeting the Open Valstorm core (`apps/open-api`).
 
-## Tech Stack
-
-- **Framework**: Typer (Python CLI)
-- **HTTP Client**: HTTPX
-- **Package Manager**: uv
-- **Console UI**: Rich library
-
-## Key Files
-
-```
-cli/
-  src/valstorm_cli/
-    main.py    # All CLI commands (login, init, pull, push, status)
-    auth.py    # Token management, refresh logic
-    stubs/     # Type stubs
-  pyproject.toml
-```
-
-## Commands
+## Running Locally
 
 ```bash
-# Run via uv
-uv run --project cli valstorm <command>
-
-# Login (being refactored to PKCE Auth Code flow)
-valstorm login
-
-# Init workspace (creates valstorm.json, object/, schemas/ dirs)
-valstorm init
-
-# Pull remote schemas to local filesystem
-valstorm pull
-
-# Push local changes to cloud
-valstorm push
-
-# Check API health
-valstorm status
+uv run --project apps/cli valstorm --help
+uv run --project apps/cli pytest apps/cli/tests
 ```
 
-## Authentication
+## Module Layout (`apps/cli/src/valstorm_cli/`)
 
-Tokens stored at: `~/.valstorm/auth_{env}_{profile}.json`
+- `main.py` — Root Typer app, `status`, `version`, `update`, `init`, and command registration.
+- `auth.py`, `auth_cmds.py` — OAuth2 PKCE + PAT auth, multi-profile management, custom self-hosted URL resolution (`VALSTORM_API_URL`, `--url`), and `auth pat` management.
+- `sync.py` — Single-roundtrip ACID `pull` and `push` via `/v1/apps/metadata/pull` and `/v1/apps/metadata/push` (`sdk.apps`), supporting `--manifest`, `--diff`, `--schemas-only`, and `--dry-run`.
+- `query.py` — `sql` and `graphql` commands. Both default to **no hydration** (`hydrate=False`), returning raw string IDs unless `--hydrate` is explicitly passed.
+- `record.py` — `record get` (default `hydrate=False`), `create`, `update`, `delete`, and `restore` (`/v1/object/{api}/undelete`).
+- `schema.py`, `field.py` — Schema/field CRUD plus Open Valstorm PostgreSQL drift detection (`schema status`) and migration reflection (`schema sync`).
+- `fn_cmds.py` — `fn list`, `fn validate` (AST gatekeeper dry-run), and `fn run` (local file, function ID, or name).
+- `app_cmds.py` — `app list`, `envs`, `install`, `uninstall`, `package`, `deploy`, `promote`, and `publish` via `sdk.apps`.
+- `rpc_cmds.py` — `rpc list` and `rpc call` for universal `/v1/platform/methods` and `/v1/platform/invoke/{target}`.
+- `sandbox.py` — `sandbox list`, `create`, `refresh`, `delete`, `use [--parent]`, and `users add|remove`.
+- `vfs_cmds.py` — Slimmed VFS operations (`ls`, `info`, `upload`, `download`, `mv`, `rm`, `index`).
+- `search_cmds.py` — Hybrid `search` and streaming RAG `ask`.
+- `project.py`, `bundler.py`, `git_utils.py`, `manifest_builder.py` — Workspace helpers.
 
-- Supports multiple profiles (dev, prod, local)
-- Auto-refresh token logic in `auth.py`
-- MCP server reads tokens from the same location
+## Auth & Shared Credentials
 
-### Current Auth Refactor: PKCE OAuth Flow
-
-Migrating `valstorm login` from Password grant → Authorization Code + PKCE.
-
-New flow (see `plans/dev plans/cli-oauth-auth-code-flow.md`):
-1. Generate `code_verifier` + `code_challenge` (SHA-256 + base64url)
-2. Generate random `state`
-3. Spin up local HTTP server on `localhost:8011/callback`
-4. Open browser to `https://app.valstorm.com/oauth2/login?client_id=...&code_challenge=...`
-5. Capture `code` from redirect
-6. Exchange `code` + `code_verifier` for tokens (no `client_secret` needed)
-7. Store tokens in `~/.valstorm/auth_{env}_{profile}.json`
-
-Benefit: Refresh tokens can last 365 days vs current 7-day limit.
-
-## Configuration
-
-`valstorm.json` in the workspace root:
-```json
-{
-  "env": "dev",
-  "profile": "default"
-}
-```
-
-## Workspace Structure After `init`
-
-```
-<workspace>/
-  valstorm.json      # Config (env, profile)
-  object/            # Local object/schema definitions
-  schemas/           # Schema metadata stubs
-```
-
-## MCP Integration
-
-The CLI's auth tokens are shared with the MCP server (`apps/valstorm-mcp`). The MCP server reads `~/.valstorm/auth_{env}_{profile}.json` directly — no separate login needed.
+Credentials live in `~/.valstorm/auth_{env}_{profile}.json` (including optional `api_url` / `web_url` for self-hosted deployments) and are shared with `apps/valstorm-mcp-server`.

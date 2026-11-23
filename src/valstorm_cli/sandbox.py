@@ -1,250 +1,218 @@
-import typer
+import json
+from typing import List, Optional
+
 import httpx
-from typing import Optional, List
+import typer
 from rich.console import Console
-from .auth import ValstormAuth, requires_auth, get_project_root, load_config
+from rich.table import Table
+
+from .auth import find_project_root, requires_auth
 
 console = Console()
-sandbox_app = typer.Typer(help="Manage developer sandboxes.")
-
-users_app = typer.Typer(help="Manage users in a sandbox.")
+sandbox_app = typer.Typer(help="Manage Valstorm isolated PostgreSQL sandboxes.")
+users_app = typer.Typer(help="Manage users with access to a sandbox.")
 sandbox_app.add_typer(users_app, name="users")
+
 
 @sandbox_app.command("create")
 @requires_auth(use_parent=True)
 def create_sandbox(
-    name: str = typer.Argument(..., help="Lowercase alphanumeric name for the sandbox (e.g., 'dev')."),
-    description: Optional[str] = typer.Option(None, "--description", "-d", help="Markdown description for the sandbox."),
+    name: str = typer.Argument(..., help="The name of the new sandbox."),
+    description: Optional[str] = typer.Option(None, "--description", "-d", help="Optional description."),
+    copy_data: bool = typer.Option(False, "--copy-data", help="Copy data from production instead of schema-only."),
+    users: Optional[List[str]] = typer.Option(None, "--user", "-u", help="User email(s) to grant sandbox access."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
     client: httpx.Client = None,  # type: ignore
 ):
-    """Provisions a new sandbox database and copies configuration."""
-    payload = {"name": name}
-    if description:
-        payload["description"] = description
-        
-    console.print(f"Creating sandbox [bold cyan]{name}[/bold cyan]...")
-    try:
-        response = client.post("/sandbox", json=payload, timeout=120.0)
-        response.raise_for_status()
+    """
+    Create a new sandbox organization.
+    """
+    payload = {"name": name, "description": description, "copy_data": copy_data}
+    if users:
+        payload["users"] = users
+
+    console.print(f"Creating sandbox '[bold cyan]{name}[/bold cyan]'...")
+    response = client.post("/sandbox/create", json=payload, timeout=120.0)
+    if response.status_code in (200, 201):
         data = response.json()
-        console.print(f"[bold green]✓ Sandbox '{name}' created successfully![/bold green]")
-        console.print(f"ID: [yellow]{data.get('id')}[/yellow]")
-    except httpx.HTTPStatusError as e:
-        console.print(f"[bold red]Error ({e.response.status_code}):[/bold red] {e.response.text}")
+        console.print(f"[bold green]✓ Successfully created sandbox '{name}'![/bold green]")
+        if "sandbox_org_id" in data:
+            console.print(f"Sandbox Org ID: [cyan]{data['sandbox_org_id']}[/cyan]")
+    else:
+        console.print(f"[bold red]Failed to create sandbox ({response.status_code}):[/bold red] {response.text}")
         raise typer.Exit(1)
-    except Exception as e:
-        console.print(f"[bold red]Failed to create sandbox:[/bold red] {str(e)}")
-        raise typer.Exit(1)
+
 
 @sandbox_app.command("list")
 @requires_auth(use_parent=True)
 def list_sandboxes(
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
     client: httpx.Client = None,  # type: ignore
 ):
-    """Lists all sandbox environments associated with the active production organization."""
-    console.print("Fetching sandboxes...")
-    try:
-        response = client.get("/sandbox", timeout=30.0)
-        response.raise_for_status()
-        data = response.json()
-        
-        if not data:
-            console.print("No sandboxes found.")
-            return
-            
-        from rich.table import Table
-        table = Table(title="Developer Sandboxes")
-        table.add_column("Sandbox Name", style="cyan")
-        table.add_column("ID", style="yellow")
-        table.add_column("Description")
-        
-        for sb in data:
-            table.add_row(sb.get("sandbox_name", ""), sb.get("id", ""), sb.get("description", "") or "")
-            
-        console.print(table)
-    except httpx.HTTPStatusError as e:
-        console.print(f"[bold red]Error ({e.response.status_code}):[/bold red] {e.response.text}")
+    """
+    List all sandboxes for your organization.
+    """
+    response = client.get("/sandbox/list", timeout=30.0)
+    if response.status_code != 200:
+        console.print(f"[bold red]Failed to list sandboxes ({response.status_code}):[/bold red] {response.text}")
         raise typer.Exit(1)
-    except Exception as e:
-        console.print(f"[bold red]Failed to list sandboxes:[/bold red] {str(e)}")
-        raise typer.Exit(1)
+
+    sandboxes = response.json()
+    if json_output:
+        print(json.dumps(sandboxes, indent=2))
+        return
+
+    if not sandboxes:
+        console.print("[yellow]No sandboxes found.[/yellow]")
+        return
+
+    table = Table(title="Organization Sandboxes")
+    table.add_column("Name", style="cyan")
+    table.add_column("Sandbox Org ID", style="magenta")
+    table.add_column("Status", style="green")
+    table.add_column("Created Date", style="dim")
+
+    for sb in sandboxes:
+        if isinstance(sb, dict):
+            table.add_row(
+                str(sb.get("name", "")),
+                str(sb.get("id", sb.get("sandbox_org_id", ""))),
+                str(sb.get("status", "Active")),
+                str(sb.get("created_date", "")),
+            )
+    console.print(table)
+
 
 @sandbox_app.command("refresh")
 @requires_auth(use_parent=True)
 def refresh_sandbox(
-    name: str = typer.Argument(..., help="Sandbox name to refresh (e.g., 'dev')"),
+    name: str = typer.Argument(..., help="The name of the sandbox to refresh."),
+    copy_data: bool = typer.Option(False, "--copy-data", help="Copy data from production during refresh."),
+    force: bool = typer.Option(False, "--force", "-y", help="Skip confirmation prompt."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
     client: httpx.Client = None,  # type: ignore
 ):
-    """Wipes the sandbox database and re-clones configuration from production."""
-    console.print(f"Refreshing sandbox [bold cyan]{name}[/bold cyan]... (This may take a minute)")
-    try:
-        response = client.post(f"/sandbox/{name}/refresh", timeout=180.0)
-        response.raise_for_status()
-        console.print(f"[bold green]✓ Sandbox '{name}' refreshed successfully![/bold green]")
-    except httpx.HTTPStatusError as e:
-        console.print(f"[bold red]Error ({e.response.status_code}):[/bold red] {e.response.text}")
+    """
+    Refresh a sandbox with the latest schemas/config (and optional data) from production.
+    """
+    if not force:
+        if not typer.confirm(f"Are you sure you want to refresh sandbox '{name}'? All uncommitted changes will be overwritten."):
+            console.print("Operation cancelled.")
+            raise typer.Exit(0)
+
+    console.print(f"Refreshing sandbox '[bold cyan]{name}[/bold cyan]'...")
+    response = client.post(f"/sandbox/{name}/refresh", json={"copy_data": copy_data}, timeout=120.0)
+    if response.status_code in (200, 201):
+        console.print(f"[bold green]✓ Successfully refreshed sandbox '{name}'![/bold green]")
+    else:
+        console.print(f"[bold red]Failed to refresh sandbox ({response.status_code}):[/bold red] {response.text}")
         raise typer.Exit(1)
-    except Exception as e:
-        console.print(f"[bold red]Failed to refresh sandbox:[/bold red] {str(e)}")
-        raise typer.Exit(1)
+
 
 @sandbox_app.command("delete")
 @requires_auth(use_parent=True)
 def delete_sandbox(
-    name: str = typer.Argument(..., help="Sandbox name to delete (e.g., 'dev')"),
-    force: bool = typer.Option(False, "--force", "-f", help="Force deletion without prompting."),
+    name: str = typer.Argument(..., help="The name of the sandbox to delete."),
+    force: bool = typer.Option(False, "--force", "-y", help="Skip confirmation prompt."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
     client: httpx.Client = None,  # type: ignore
 ):
-    """Permanently deletes a sandbox and all its contents."""
+    """
+    Delete a sandbox organization permanently.
+    """
     if not force:
-        confirm = typer.confirm(f"Are you sure you want to permanently delete the sandbox '{name}'?")
-        if not confirm:
+        if not typer.confirm(f"Are you sure you want to PERMANENTLY delete sandbox '{name}'?"):
             console.print("Operation cancelled.")
-            raise typer.Exit()
-            
-    console.print(f"Deleting sandbox [bold cyan]{name}[/bold cyan]...")
-    try:
-        response = client.delete(f"/sandbox/{name}", timeout=120.0)
-        response.raise_for_status()
-        console.print(f"[bold green]✓ Sandbox '{name}' deleted successfully![/bold green]")
-    except httpx.HTTPStatusError as e:
-        console.print(f"[bold red]Error ({e.response.status_code}):[/bold red] {e.response.text}")
+            raise typer.Exit(0)
+
+    console.print(f"Deleting sandbox '[bold red]{name}[/bold red]'...")
+    response = client.delete(f"/sandbox/{name}", timeout=60.0)
+    if response.status_code in (200, 204):
+        console.print(f"[bold green]✓ Successfully deleted sandbox '{name}'.[/bold green]")
+    else:
+        console.print(f"[bold red]Failed to delete sandbox ({response.status_code}):[/bold red] {response.text}")
         raise typer.Exit(1)
-    except Exception as e:
-        console.print(f"[bold red]Failed to delete sandbox:[/bold red] {str(e)}")
-        raise typer.Exit(1)
+
 
 @users_app.command("add")
 @requires_auth(use_parent=True)
 def add_users(
-    name: str = typer.Argument(..., help="Sandbox name"),
-    users: List[str] = typer.Argument(..., help="List of User IDs or Emails to add"),
+    name: str = typer.Argument(..., help="The name of the sandbox."),
+    users: List[str] = typer.Argument(..., help="User emails or IDs to add to the sandbox."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
     client: httpx.Client = None,  # type: ignore
 ):
-    """Add users to a sandbox environment."""
-    console.print(f"Adding users to sandbox [bold cyan]{name}[/bold cyan]...")
-    try:
-        response = client.post(f"/sandbox/{name}/users", json={"users": users}, timeout=60.0)
-        response.raise_for_status()
-        data = response.json()
-        added = data.get("added_users", [])
-        for u in added:
-            console.print(f"  [green]+[/green] {u}")
-        console.print(f"[bold green]✓ Added {len(added)} users.[/bold green]")
-    except httpx.HTTPStatusError as e:
-        console.print(f"[bold red]Error ({e.response.status_code}):[/bold red] {e.response.text}")
+    """
+    Grant users access to a sandbox.
+    """
+    response = client.post(f"/sandbox/{name}/users", json={"users": users}, timeout=60.0)
+    if response.status_code in (200, 201):
+        console.print(f"[bold green]✓ Added {len(users)} user(s) to sandbox '{name}'.[/bold green]")
+    else:
+        console.print(f"[bold red]Failed to add users ({response.status_code}):[/bold red] {response.text}")
         raise typer.Exit(1)
-    except Exception as e:
-        console.print(f"[bold red]Failed to add users:[/bold red] {str(e)}")
-        raise typer.Exit(1)
+
 
 @users_app.command("remove")
 @requires_auth(use_parent=True)
 def remove_users(
-    name: str = typer.Argument(..., help="Sandbox name"),
-    users: List[str] = typer.Argument(..., help="List of User IDs or Emails to remove"),
+    name: str = typer.Argument(..., help="The name of the sandbox."),
+    users: List[str] = typer.Argument(..., help="User emails or IDs to remove from the sandbox."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
     client: httpx.Client = None,  # type: ignore
 ):
-    """Remove users from a sandbox environment."""
-    console.print(f"Removing users from sandbox [bold cyan]{name}[/bold cyan]...")
-    try:
-        response = client.request(
-            method="DELETE",
-            url=f"/sandbox/{name}/users",
-            json={"users": users},
-            timeout=60.0
-        )
-        response.raise_for_status()
-        data = response.json()
-        removed = data.get("removed_users", [])
-        for u in removed:
-            console.print(f"  [red]-[/red] {u}")
-        console.print(f"[bold green]✓ Removed {len(removed)} users.[/bold green]")
-    except httpx.HTTPStatusError as e:
-        console.print(f"[bold red]Error ({e.response.status_code}):[/bold red] {e.response.text}")
-        raise typer.Exit(1)
-    except Exception as e:
-        console.print(f"[bold red]Failed to remove users:[/bold red] {str(e)}")
+    """
+    Revoke users' access to a sandbox.
+    """
+    response = client.request("DELETE", f"/sandbox/{name}/users", json={"users": users}, timeout=60.0)
+    if response.status_code in (200, 204):
+        console.print(f"[bold green]✓ Removed {len(users)} user(s) from sandbox '{name}'.[/bold green]")
+    else:
+        console.print(f"[bold red]Failed to remove users ({response.status_code}):[/bold red] {response.text}")
         raise typer.Exit(1)
 
 
 @sandbox_app.command("use")
-@requires_auth(use_parent=True)
 def use_sandbox(
-    name: str = typer.Argument(..., help="The name of the sandbox to switch to."),
-    client: httpx.Client = None,  # type: ignore
+    name: Optional[str] = typer.Argument(None, help="The sandbox name to target (omit when using --parent)."),
+    parent: bool = typer.Option(False, "--parent", help="Switch back to the parent/production organization."),
 ):
     """
-    Switch the local workspace target to a specific sandbox.
+    Configure the current project (`valstorm.json`) to target a sandbox, or pass `--parent` to return to production.
     """
-    import json
-    
-    try:
-        root = get_project_root()
-    except Exception:
-        console.print("[bold red]Not in a Valstorm project directory.[/bold red]")
+    root = find_project_root()
+    if not root:
+        console.print("[bold red]Error:[/bold red] Not in a Valstorm project directory (missing valstorm.json).")
         raise typer.Exit(1)
-        
-    config = load_config(root)
-    
-    # Optional: Verify sandbox actually exists in parent org by listing them
+
+    config_path = root / "valstorm.json"
     try:
-        res = client.get("/sandbox", timeout=10.0)
-        if res.status_code == 200:
-            sandboxes = res.json()
-            sandbox_names = [s.get("sandbox_name") for s in sandboxes if s.get("sandbox_name")]
-            if name not in sandbox_names:
-                console.print(f"[yellow]Warning: Sandbox '{name}' was not found in your organization.[/yellow]")
-                console.print(f"Available sandboxes: {', '.join(sandbox_names) or 'None'}")
-                if not typer.confirm("Do you want to switch to it anyway?"):
-                    raise typer.Exit(0)
-    except Exception:
-        pass # Handle gracefully if offline or request fails
-        
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        console.print(f"[bold red]Error reading valstorm.json:[/bold red] {e}")
+        raise typer.Exit(1)
+
+    if parent or (name and name.lower() in ("parent", "prod", "none")):
+        if "sandbox" in config:
+            old_sb = config.pop("sandbox")
+            config_path.write_text(json.dumps(config, indent=4), encoding="utf-8")
+            console.print(f"[bold green]✓ Switched back to parent organization[/bold green] (exited sandbox '{old_sb}').")
+        else:
+            console.print("[yellow]Project is already targeting the parent organization.[/yellow]")
+        return
+
+    if not name:
+        console.print("[bold red]Error:[/bold red] Provide a sandbox name or pass `--parent`.")
+        raise typer.Exit(1)
+
     config["sandbox"] = name
-    
-    with open(root / "valstorm.json", "w") as f:
-        json.dump(config, f, indent=4)
-        
-    console.print(f"[bold green]✓ Switched workspace target to sandbox '{name}'[/bold green]")
-
-
-@sandbox_app.command("switch", hidden=True)
-def switch_sandbox(
-    name: str = typer.Argument(..., help="The name of the sandbox to switch to.")
-):
-    """
-    Alias for use.
-    """
-    use_sandbox(name)
-
-
-@sandbox_app.command("use-parent")
-def use_parent():
-    """
-    Switch the local workspace target back to the parent production/dev organization.
-    """
-    import json
-    
-    try:
-        root = get_project_root()
-    except Exception:
-        console.print("[bold red]Not in a Valstorm project directory.[/bold red]")
-        raise typer.Exit(1)
-        
-    config = load_config(root)
-    if "sandbox" in config:
-        del config["sandbox"]
-        
-    with open(root / "valstorm.json", "w") as f:
-        json.dump(config, f, indent=4)
-        
-    console.print("[bold green]✓ Switched workspace target back to parent production/dev environment[/bold green]")
-
-
-@sandbox_app.command("switch-back", hidden=True)
-def switch_back():
-    """
-    Alias for use-parent.
-    """
-    use_parent()
+    config_path.write_text(json.dumps(config, indent=4), encoding="utf-8")
+    console.print(f"[bold green]✓ Active workspace sandbox set to '[bold cyan]{name}[/bold cyan]'.[/bold green]")
+    console.print("Run [bold]valstorm sandbox use --parent[/bold] to switch back to production.")

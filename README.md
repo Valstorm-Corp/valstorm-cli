@@ -1,59 +1,80 @@
-# Valstorm CLI
+# Open Valstorm CLI (`valstorm-cli`)
 
-A local command-line interface for Valstorm developers to authenticate via OAuth 2.1 + PKCE, pull and push object schemas as code, and manage local workspaces.
-
-- **Official Tool Page & Quickstart:** [https://www.valstorm.com/free-tools/valstorm-cli](https://www.valstorm.com/free-tools/valstorm-cli?utm_source=github&utm_medium=readme&utm_campaign=valstorm_cli)
-- **All Valstorm Free & Open-Source Tools:** [https://www.valstorm.com/free-tools](https://www.valstorm.com/free-tools?utm_source=github&utm_medium=readme&utm_campaign=valstorm_cli)
-- **Valstorm BOS Platform Overview:** [https://www.valstorm.com/bos](https://www.valstorm.com/bos?utm_source=github&utm_medium=readme&utm_campaign=valstorm_cli)
-- **Valstorm Pricing & Self-Serve Workspace:** [https://www.valstorm.com/pricing](https://www.valstorm.com/pricing?utm_source=github&utm_medium=readme&utm_campaign=valstorm_cli)
-
-## Prerequisites
-
-- [uv](https://github.com/astral-sh/uv) installed on your machine (`curl -LsSf https://astral.sh/uv/install.sh | sh`).
-- Ensure `$HOME/.local/bin` is added to your `PATH` (executables installed via `uv tool` reside in `~/.local/bin`):
-  ```bash
-  # For zsh (default on macOS):
-  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
-
-  # For bash:
-  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
-  ```
-
-## Usage
-
-### Run from the Monorepo Root
-The recommended way to run the CLI while developing is using `uv run` from the root:
-
-```bash
-uv run --project cli valstorm --help
-```
-
-To check the API status:
-```bash
-uv run --project cli valstorm status
-```
-
-### Run from the CLI Directory
-You can also run it directly from this folder:
-
-```bash
-cd cli
-uv run valstorm status
-```
+A focused developer CLI for **Open Valstorm** (`apps/open-api`, `apps/open-worker`, and self-hosted or hosted instances).
 
 ## Installation
 
-To install the `valstorm` command globally, use `uv tool install` directly from GitHub:
-
 ```bash
-uv tool install git+https://github.com/Valstorm-Corp/valstorm-cli
+# Install via uv (recommended)
+uv tool install git+https://github.com/Valstorm-Corp/valstorm-cli.git
+
+# Or run directly inside the monorepo
+uv run --project apps/cli valstorm --help
 ```
 
-Now you can just run:
+Optional MCP server extra:
+
 ```bash
-valstorm status
+pip install "valstorm-cli[mcp] @ git+https://github.com/Valstorm-Corp/valstorm-cli.git"
 ```
 
-## Commands
+## Quick Start
 
-- `status`: Checks if the Valstorm API is live.
+```bash
+# Authenticate (hosted or self-hosted Open Valstorm)
+valstorm login
+valstorm login --url https://api.acme.internal
+valstorm login --pat pat_... --url https://api.acme.internal
+
+# Initialize a local workspace & sync metadata/schemas
+valstorm init
+valstorm pull
+valstorm push --dry-run
+
+# Inspect PostgreSQL schema drift & sync migrations (Alembic/Prisma/SQL)
+valstorm schema status
+valstorm schema sync
+
+# Query data (raw lookup IDs by default; pass --hydrate for {id, name})
+valstorm sql "SELECT id, name, owner FROM contact LIMIT 10"
+valstorm sql "SELECT id, name, owner FROM contact LIMIT 10" --hydrate
+valstorm graphql "{ contact(limit: 5) { id name owner { id name } } }"
+valstorm graphql "{ contact(limit: 5) { id name owner { id name } } }" --hydrate
+
+# Validate & execute serverless Python functions
+valstorm fn list
+valstorm fn validate function/my_handler.py
+valstorm fn run function/my_handler.py --input '{"hello": "world"}'
+
+# Discover & invoke PlatformContext / plugin RPC methods
+valstorm rpc list --namespace utils
+valstorm rpc call utils.ping -a message=hello
+```
+
+## Command Overview
+
+| Group / Command | Description |
+|---|---|
+| `status`, `version`, `update`, `init` | API health, CLI version/upgrade, workspace scaffolding |
+| `login`, `auth` | OAuth2 PKCE / PAT login (`--url` for self-hosted), profiles, `whoami`, `pat` management |
+| `project` | `open` web app, `update-stubs` |
+| `pull`, `push` | Single-roundtrip ACID metadata & schema sync (`/v1/apps/metadata/pull`, `/push`) |
+| `schema` | `list`, `get`, `create`, `update`, `delete`, `status` (PG drift), `sync` (PG reflection), `field` |
+| `record` | `get` (default raw IDs; `--hydrate`), `create`, `update`, `delete`, `restore` |
+| `sql`, `graphql` | Execute SQL / GraphQL queries (default raw IDs; pass `--hydrate` for `{id, name}`) |
+| `fn` | `list`, `validate`, `run` serverless Python functions |
+| `app` | `list`, `envs`, `install`, `uninstall`, `package`, `deploy`, `promote`, `publish` |
+| `sandbox` | `list`, `create`, `refresh`, `delete`, `use [--parent]`, `users add\|remove` |
+| `vfs` | `ls`, `info`, `upload`, `download`, `mv`, `rm`, `index` |
+| `search`, `ask` | Hybrid pgvector + BM25 search and streaming RAG Q&A |
+| `rpc` | `list`, `call` universal PlatformContext & plugin RPC methods |
+
+## Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `VALSTORM_API_URL` | Override API base URL (for self-hosted Open Valstorm instances) |
+| `VALSTORM_WEB_URL` | Override web app base URL for browser OAuth |
+| `VALSTORM_TOKEN` / `VALSTORM_API_KEY` | Headless Bearer/PAT token for CI/CD |
+| `VALSTORM_ENV` | Environment label (`prod`, `dev`, `local`, or custom) |
+| `VALSTORM_PROFILE` | Auth profile name (`default` or custom) |

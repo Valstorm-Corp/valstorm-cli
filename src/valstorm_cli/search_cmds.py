@@ -163,7 +163,7 @@ async def stream_search_events(
     enable_rag: bool = True,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Connects to POST /v1/search/stream and yields parsed SSE event objects."""
-    base_url = get_api_base_url(auth.env)
+    base_url = getattr(auth, "api_base_url", None) or get_api_base_url(auth.env)
     payload = {
         "query": query,
         "vault_id": vault_id,

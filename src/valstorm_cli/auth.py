@@ -63,17 +63,30 @@ ENVIRONMENTS = {
     "prod": "https://api.valstorm.com",
     "dev": "https://api-dev.valstorm.com",
     "local": "http://localhost:8010",
-    "blue": "http://localhost:8011",
-    "green": "http://localhost:8021"
 }
 
 WEB_ENVIRONMENTS = {
     "prod": "https://app.valstorm.com",
     "dev": "https://app-dev.valstorm.com",
     "local": "http://localhost:3000",
-    "blue": "http://localhost:3000",
-    "green": "http://localhost:3000"
 }
+
+
+def normalize_api_url(url: str) -> str:
+    """Normalize an API URL so it always ends with `/v1` without duplication."""
+    clean = url.strip().rstrip("/")
+    if clean.endswith("/v1"):
+        return clean
+    return f"{clean}/v1"
+
+
+def normalize_base_url(url: str) -> str:
+    """Normalize a base URL by stripping trailing slashes and any `/v1` suffix."""
+    clean = url.strip().rstrip("/")
+    if clean.endswith("/v1"):
+        return clean[:-3]
+    return clean
+
 
 def _load_workspace_config() -> dict:
     """Helper to find and load valstorm.json by searching upwards."""
@@ -90,11 +103,13 @@ def _load_workspace_config() -> dict:
         current = current.parent
     return {}
 
+
 def get_env() -> str:
     if "VALSTORM_ENV" in os.environ:
         return os.environ["VALSTORM_ENV"].lower()
     config = _load_workspace_config()
     return config.get("env", "prod").lower()
+
 
 def get_profile() -> str:
     if "VALSTORM_PROFILE" in os.environ:
@@ -102,21 +117,62 @@ def get_profile() -> str:
     config = _load_workspace_config()
     return config.get("profile", "default").lower()
 
+
 def get_sandbox() -> Optional[str]:
     config = _load_workspace_config()
     val = config.get("sandbox")
     return val.lower() if val else None
 
-def get_base_url(env: str = None) -> str:
+
+def get_custom_api_url() -> Optional[str]:
+    env_url = os.environ.get("VALSTORM_API_URL") or os.environ.get("VALSTORM_BASE_URL")
+    if env_url and env_url.strip():
+        return normalize_base_url(env_url)
+    config = _load_workspace_config()
+    cfg_url = config.get("api_url") or config.get("url")
+    if isinstance(cfg_url, str) and cfg_url.strip():
+        return normalize_base_url(cfg_url)
+    return None
+
+
+def get_custom_web_url() -> Optional[str]:
+    env_url = os.environ.get("VALSTORM_WEB_URL")
+    if env_url and env_url.strip():
+        return env_url.strip().rstrip("/")
+    config = _load_workspace_config()
+    cfg_url = config.get("web_url")
+    if isinstance(cfg_url, str) and cfg_url.strip():
+        return cfg_url.strip().rstrip("/")
+    return None
+
+
+def get_base_url(env: str = None, api_url: str = None) -> str:
+    if api_url and api_url.strip():
+        return normalize_base_url(api_url)
+    custom = get_custom_api_url()
+    if custom:
+        return custom
     env = env or get_env()
     return ENVIRONMENTS.get(env, ENVIRONMENTS["prod"])
 
-def get_web_url(env: str = None) -> str:
+
+def get_web_url(env: str = None, web_url: str = None, api_url: str = None) -> str:
+    if web_url and web_url.strip():
+        return web_url.strip().rstrip("/")
+    custom_web = get_custom_web_url()
+    if custom_web:
+        return custom_web
+    if api_url and api_url.strip():
+        base = normalize_base_url(api_url)
+        if "://api." in base:
+            return base.replace("://api.", "://app.", 1)
+        return base
     env = env or get_env()
     return WEB_ENVIRONMENTS.get(env, WEB_ENVIRONMENTS["prod"])
 
-def get_api_base_url(env: str = None) -> str:
-    return f"{get_base_url(env)}/v1"
+
+def get_api_base_url(env: str = None, api_url: str = None) -> str:
+    return normalize_api_url(get_base_url(env=env, api_url=api_url))
 
 def get_auth_file(env: str, profile: str) -> Path:
     """Helper to get the auth file path for a specific environment and profile."""
@@ -172,16 +228,39 @@ class ValstormHTTPAuth(httpx.Auth):
 class ValstormAuth:
     _validation_cache = {} # (env, profile) -> bool
 
-    def __init__(self, profile: str = None, env: str = None, use_parent: bool = False):
+    def __init__(
+        self,
+        profile: str = None,
+        env: str = None,
+        use_parent: bool = False,
+        api_url: str = None,
+        web_url: str = None,
+    ):
         self.profile = profile or get_profile()
         self.env = env or get_env()
         self.sandbox = None if use_parent else get_sandbox()
+        self._explicit_api_url = normalize_base_url(api_url) if api_url and api_url.strip() else None
+        self._explicit_web_url = web_url.strip().rstrip("/") if web_url and web_url.strip() else None
+        self.api_url: Optional[str] = self._explicit_api_url
+        self.web_url: Optional[str] = self._explicit_web_url
         self.access_token = None
         self.refresh_token = None
         self.organization_name = None
         self.default_app_id = None
         self.user = None
         self._load_tokens()
+
+    @property
+    def api_base_url(self) -> str:
+        return get_api_base_url(env=self.env, api_url=self._explicit_api_url or self.api_url)
+
+    @property
+    def web_base_url(self) -> str:
+        return get_web_url(
+            env=self.env,
+            web_url=self._explicit_web_url or self.web_url,
+            api_url=self._explicit_api_url or self.api_url,
+        )
 
     @property
     def auth_file(self) -> Path:
@@ -194,7 +273,9 @@ class ValstormAuth:
         self.organization_name = None
         self.default_app_id = None
         self.user = None
-        
+        self.api_url = self._explicit_api_url
+        self.web_url = self._explicit_web_url
+
         target_file = self.auth_file
         if target_file.exists():
             try:
@@ -207,11 +288,25 @@ class ValstormAuth:
                 self.organization_name = data.get("organization_name")
                 self.default_app_id = data.get("default_app_id")
                 self.user = data.get("user")
+                if not self.api_url and data.get("api_url"):
+                    self.api_url = normalize_base_url(data["api_url"])
+                if not self.web_url and data.get("web_url"):
+                    self.web_url = str(data["web_url"]).strip().rstrip("/")
 
             except (json.JSONDecodeError, Exception):
                 # If file is corrupted or unreadable, we ignore it 
                 # so ensure_valid_token will return False and trigger a re-login
                 pass
+
+        # Environment-variable token fallback for CI/CD and headless self-hosted Open Valstorm usage
+        if not self.access_token:
+            env_token = (
+                os.environ.get("VALSTORM_TOKEN")
+                or os.environ.get("VALSTORM_API_KEY")
+                or os.environ.get("VALSTORM_PAT")
+            )
+            if env_token and env_token.strip():
+                self.access_token = env_token.strip()
 
         # Fallback to desktop app tokens if no active token or token is expired without refresh_token
         if (not self.access_token or (is_jwt_expired(self.access_token) and not self.refresh_token)) and self.env == "prod":
@@ -229,7 +324,16 @@ class ValstormAuth:
                 except Exception:
                     pass
 
-    def save_tokens(self, access_token: str, refresh_token: str = None, organization_name: str = None, default_app_id: str = None, user: dict = None):
+    def save_tokens(
+        self,
+        access_token: str,
+        refresh_token: str = None,
+        organization_name: str = None,
+        default_app_id: str = None,
+        user: dict = None,
+        api_url: str = None,
+        web_url: str = None,
+    ):
         if access_token:
             self.access_token = access_token
         if refresh_token is not None:
@@ -244,7 +348,11 @@ class ValstormAuth:
             self.default_app_id = default_app_id
         if user is not None:
             self.user = user
-            
+        if api_url is not None:
+            self.api_url = normalize_base_url(api_url) if api_url.strip() else None
+        if web_url is not None:
+            self.web_url = web_url.strip().rstrip("/") if web_url.strip() else None
+
         try:
             self.auth_file.parent.mkdir(parents=True, exist_ok=True)
             data = {}
@@ -259,6 +367,10 @@ class ValstormAuth:
             data["default_app_id"] = self.default_app_id
             if self.user is not None:
                 data["user"] = self.user
+            if self.api_url:
+                data["api_url"] = self.api_url
+            if self.web_url:
+                data["web_url"] = self.web_url
 
             # Write to a temporary file first then rename to ensure atomicity
             temp_file = self.auth_file.with_suffix(".tmp")
@@ -270,7 +382,7 @@ class ValstormAuth:
 
     def get_client(self, **kwargs) -> httpx.Client:
         """Returns an httpx.Client equipped with automatic token refresh."""
-        base_url = get_api_base_url(self.env)
+        base_url = self.api_base_url
         timeout = kwargs.get("timeout", 10.0)
         return httpx.Client(
             base_url=base_url,
@@ -281,7 +393,7 @@ class ValstormAuth:
     def get_sdk_client(self, **kwargs):
         """Returns a ValstormClient from valstorm SDK equipped with automatic token refresh."""
         from valstorm import ValstormClient, UserJwtAuth, PatAuth
-        base_url = get_api_base_url(self.env)
+        base_url = self.api_base_url
         timeout = kwargs.get("timeout", 30.0)
 
         if self.access_token and self.access_token.startswith(("vst_pat_", "pat_")):
@@ -301,9 +413,9 @@ class ValstormAuth:
     def refresh_auth(self) -> bool:
         if not self.refresh_token:
             return False
-        
+
         try:
-            with httpx.Client(base_url=get_api_base_url(self.env), timeout=10.0) as client:
+            with httpx.Client(base_url=self.api_base_url, timeout=10.0) as client:
                 response = client.post("/oauth2/refresh", json={"refresh_token": self.refresh_token})
                 if response.status_code == 200:
                     data = response.json()
@@ -314,7 +426,6 @@ class ValstormAuth:
                 else:
                     return False
         except Exception:
-            # print(f"Error refreshing token: {e}", file=sys.stderr)
             return False
 
     def _get_cached_sandbox_token(self, sandbox_name: str) -> Optional[str]:
@@ -372,7 +483,7 @@ class ValstormAuth:
     def _validate_sandbox_token(self, token: str) -> bool:
         headers = {"Authorization": f"Bearer {token}"}
         try:
-            with httpx.Client(base_url=get_api_base_url(self.env), headers=headers, timeout=5.0) as client:
+            with httpx.Client(base_url=self.api_base_url, headers=headers, timeout=5.0) as client:
                 res = client.get("/auth/load")
                 return res.status_code == 200
         except Exception:
@@ -381,7 +492,7 @@ class ValstormAuth:
     def _switch_to_sandbox_org(self, parent_token: str, sandbox_org_id: str) -> Optional[str]:
         headers = {"Authorization": f"Bearer {parent_token}"}
         try:
-            with httpx.Client(base_url=get_api_base_url(self.env), headers=headers, timeout=10.0) as client:
+            with httpx.Client(base_url=self.api_base_url, headers=headers, timeout=10.0) as client:
                 res = client.post("auth/switch", json={"id": sandbox_org_id})
                 if res.status_code == 200:
                     return res.json().get("access_token")
@@ -483,9 +594,7 @@ class ValstormAuth:
                     console.print(f"[yellow]Access token for profile '{self.profile}' in environment '{self.env}' was invalid. {'Successfully refreshed.' if success else 'Failed to refresh, please log in again.'}[/yellow]")
                     return success
         except (httpx.ConnectError, httpx.ConnectTimeout):
-            # If server is unreachable, we can't validate, but we don't want to spam error messages
-            # Return False and let the command handle the failure
-            console.print(f"[red]Unable to connect to Valstorm API at {get_api_base_url(self.env)} to validate token. Please check your network connection and try again.[/red]")
+            console.print(f"[red]Unable to connect to Valstorm API at {self.api_base_url} to validate token. Please check your network connection and try again.[/red]")
             return False
         except Exception:
             console.print(f"[red]An error occurred while validating the token for profile '{self.profile}' in environment '{self.env}'. Please try logging in again.[/red]")
@@ -512,9 +621,17 @@ def load_config(root: Path) -> dict:
     with open(root / "valstorm.json", "r") as f:
         return json.load(f)
 
-def get_auth(profile: Optional[str] = None, env: Optional[str] = None, use_parent: bool = False) -> 'ValstormAuth':
+def get_auth(
+    profile: Optional[str] = None,
+    env: Optional[str] = None,
+    use_parent: bool = False,
+    api_url: Optional[str] = None,
+    web_url: Optional[str] = None,
+) -> 'ValstormAuth':
     auth_profile = profile
     auth_env = env
+    auth_api_url = api_url
+    auth_web_url = web_url
 
     root = find_project_root()
     if root:
@@ -524,10 +641,20 @@ def get_auth(profile: Optional[str] = None, env: Optional[str] = None, use_paren
                 auth_profile = config.get("profile")
             if auth_env is None:
                 auth_env = config.get("env")
+            if auth_api_url is None:
+                auth_api_url = config.get("api_url") or config.get("url")
+            if auth_web_url is None:
+                auth_web_url = config.get("web_url")
         except Exception:
             pass
 
-    return ValstormAuth(profile=auth_profile, env=auth_env, use_parent=use_parent)
+    return ValstormAuth(
+        profile=auth_profile,
+        env=auth_env,
+        use_parent=use_parent,
+        api_url=auth_api_url,
+        web_url=auth_web_url,
+    )
 
 
 def requires_auth(func=None, *, use_parent: bool = False):

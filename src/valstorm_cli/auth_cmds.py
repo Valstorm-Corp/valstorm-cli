@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from rich.console import Console
-from .auth import get_auth, get_api_base_url, get_web_url, find_project_root, get_project_root, load_config, requires_auth, ValstormAuth
+from .auth import get_auth, find_project_root, get_project_root, load_config, requires_auth, ValstormAuth
 
 console = Console()
 auth_app = typer.Typer(help="Manage Valstorm authentication profiles and sessions.")
@@ -98,7 +98,16 @@ def list_profiles():
             data = json.loads(content)
             user = data.get("user", {})
             org_name = data.get("organization_name", "Unknown Org")
-            found.append({"env": env, "profile": profile, "org": org_name, "user": user.get("name", "Unknown User"), "email": user.get("email", "Unknown Email"), "org_id": user.get("organization_id", "Unknown Org ID"), "user_id": user.get("id", "Unknown User ID")})
+            found.append({
+                "env": env,
+                "profile": profile,
+                "org": org_name,
+                "api_url": data.get("api_url"),
+                "user": user.get("name", "Unknown User"),
+                "email": user.get("email", "Unknown Email"),
+                "org_id": user.get("organization_id", "Unknown Org ID"),
+                "user_id": user.get("id", "Unknown User ID"),
+            })
         except Exception as e:
             found.append({"env": env, "profile": profile, "org": f"Corrupted file ({str(e)})"})
 
@@ -107,12 +116,12 @@ def list_profiles():
         return
 
     console.print("\n[bold]Available Authentication Profiles:[/bold]")
-    
+
     # Identify currently active profile if in a project
     active_profile = None
     active_env = None
     try:
-        root = get_project_root()
+        root = find_project_root()
         if root:
             with open(root / "valstorm.json", "r") as f:
                 config = json.load(f)
@@ -126,7 +135,8 @@ def list_profiles():
     for entry in found:
         is_active = (entry["profile"] == active_profile and entry["env"] == active_env) or (len(found) == 1 and not has_exact_match)
         marker = "[green]*[/green]" if is_active else " "
-        console.print(f"{marker} Profile: [cyan]{entry['profile']}[/cyan] | Env: [blue]{entry['env']}[/blue] | Org: {entry['org']}")
+        url_suffix = f" | URL: [dim]{entry['api_url']}[/dim]" if entry.get("api_url") else ""
+        console.print(f"{marker} Profile: [cyan]{entry['profile']}[/cyan] | Env: [blue]{entry['env']}[/blue] | Org: {entry['org']}{url_suffix}")
         
     console.print("\n[dim]* Indicates active authentication profile[/dim]")
 
@@ -196,17 +206,21 @@ def login(
     method: Optional[str] = typer.Argument(None, help="Login method, e.g., 'pat'"),
     key: Optional[str] = typer.Argument(None, help="The token/key for the given method"),
     profile: str = typer.Option(None, "--profile", "-p", help="Profile name to save these credentials under."),
-    env: str = typer.Option(None, "--env", "-e", help="Target environment (local, dev, prod)."),
-    use_password: bool = typer.Option(False, "--password", help="Use legacy password flow."),
-    pat: str = typer.Option(None, "--pat", help="Login using a Personal Access Token (PAT)."),
+    env: str = typer.Option(None, "--env", "-e", help="Target environment (local, dev, prod, or custom label)."),
+    url: Optional[str] = typer.Option(None, "--url", "--api-url", help="Custom self-hosted Open Valstorm API base URL (e.g. https://api.acme.internal)."),
+    web_url: Optional[str] = typer.Option(None, "--web-url", help="Custom web app URL for browser OAuth login."),
+    use_password: bool = typer.Option(False, "--password", help="Use password flow."),
+    pat: str = typer.Option(None, "--pat", "--token", help="Login using a Personal Access Token (PAT)."),
     refresh_token: Optional[str] = typer.Option(None, "--refresh-token", "-r", help="Optional refresh token to save alongside access token.")
 ):
     """
-    Authenticate with Valstorm.
+    Authenticate with Valstorm (hosted or self-hosted Open Valstorm).
     """
-    auth = get_auth(profile=profile, env=env)
-    
-    console.print(f"Logging in to [blue]{get_api_base_url(auth.env)}[/blue] (Profile: [cyan]{auth.profile}[/cyan])")
+    auth = get_auth(profile=profile, env=env, api_url=url, web_url=web_url)
+    api_base_url = auth.api_base_url
+    web_base = auth.web_base_url
+
+    console.print(f"Logging in to [blue]{api_base_url}[/blue] (Profile: [cyan]{auth.profile}[/cyan])")
 
     if method in ("pat", "token", "tokens") and key:
         pat = key
@@ -222,19 +236,24 @@ def login(
         saved_refresh = refresh_token
         if not saved_refresh and pat.startswith("eyJ"):
             saved_refresh = auth.refresh_token or None
-        auth.save_tokens(access_token=pat, refresh_token=saved_refresh)
+        auth.save_tokens(
+            access_token=pat,
+            refresh_token=saved_refresh,
+            api_url=url or auth.api_url,
+            web_url=web_url or auth.web_url,
+        )
         if auth.ensure_valid_token():
             console.print(f"[bold green]Successfully logged in using token for profile '{auth.profile}'.[/bold green]")
             return
         else:
             console.print("[bold red]Invalid authentication token.[/bold red]")
             raise typer.Exit(1)
-    
+
     if use_password:
         email = typer.prompt("Email")
         password = typer.prompt("Password", hide_input=True)
 
-        with httpx.Client(base_url=get_api_base_url(auth.env)) as client:
+        with httpx.Client(base_url=api_base_url) as client:
             # OAuth2 password flow uses form-urlencoded data
             response = client.post("/oauth2/login", data={
                 "grant_type": "password",
@@ -253,30 +272,29 @@ def login(
             if "detail" in data and "2FA" in data["detail"]:
                 console.print(f"[yellow]{data['detail']}[/yellow]")
                 code = typer.prompt("Enter 2FA Code")
-                
+
                 verify_response = client.post("/oauth2/verify-2fa", json={
                     "email": email,
                     "code": code
                 })
-                
+
                 if verify_response.status_code != 200:
                     console.print(f"[bold red]2FA Verification Failed:[/bold red] {verify_response.text}")
                     raise typer.Exit(1)
-                    
+
                 data = verify_response.json()
     else:
         # OAuth Browser Flow
         client_id = "valstorm-cli"
         redirect_uri = "http://127.0.0.1:8011/callback"
         port = 8011
-        
+
         verifier, challenge = get_pkce_pair()
         state = secrets.token_urlsafe(16)
-        
-        with httpx.Client(base_url=get_api_base_url(auth.env)) as client:
+
+        with httpx.Client(base_url=api_base_url) as client:
             try:
                 # 1. Build Authorize URL directly
-                web_base = get_web_url(auth.env)
                 from urllib.parse import urlencode
                 params = {
                     "client_id": client_id,
@@ -355,24 +373,28 @@ def login(
 
     if "access_token" in data:
         auth.save_tokens(
-            access_token=data["access_token"], 
-            refresh_token=data.get("refresh_token")
+            access_token=data["access_token"],
+            refresh_token=data.get("refresh_token"),
+            api_url=url or auth.api_url,
+            web_url=web_url or auth.web_url,
         )
-        
+
         # Fetch user details to save organization name for the profile list
         with auth.get_client() as auth_client:
             load_res = auth_client.get("/auth/load")
             if load_res.status_code == 200:
                 user_data = load_res.json()
-                user = user_data.get("user", user_data) # handle both nested and unnested responses
+                user = user_data.get("user", user_data)  # handle both nested and unnested responses
                 org_name = user.get("organization_name") if isinstance(user, dict) else None
                 auth.save_tokens(
                     access_token=data["access_token"],
                     refresh_token=data.get("refresh_token"),
                     organization_name=org_name,
-                    user=user if isinstance(user, dict) else None
+                    user=user if isinstance(user, dict) else None,
+                    api_url=url or auth.api_url,
+                    web_url=web_url or auth.web_url,
                 )
-                    
+
         console.print("[bold green]Successfully logged in![/bold green]")
     else:
         console.print("[bold red]Unexpected response during login.[/bold red]")
@@ -402,7 +424,7 @@ def logout(
         
     # If not clearing all, determine env and profile
     if not env or not profile:
-        root = get_project_root()
+        root = find_project_root()
         if root:
             try:
                 config = load_config(root)
@@ -433,6 +455,7 @@ def whoami(
     profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
     env: str = typer.Option(None, "--env", "-e", help="Target environment."),
     client: httpx.Client = None,  # type: ignore
+    auth: ValstormAuth = None,  # type: ignore
 ):
     """
     Display current authenticated user info.
@@ -449,6 +472,8 @@ def whoami(
         role_info = user.get('role')
         role_name = role_info.get('name') if isinstance(role_info, dict) else role_info or 'Unknown'
         console.print(f"Role: {role_name}")
+        if auth is not None:
+            console.print(f"API Endpoint: [dim]{auth.api_base_url}[/dim]")
     else:
         console.print(f"[bold red]Failed to load user data:[/bold red] {response.status_code}")
 
@@ -466,7 +491,8 @@ pat_app = typer.Typer(help="Manage Personal Access Tokens (PATs).")
 @requires_auth
 def pat_create(
     name: str = typer.Argument(..., help="A name for this Personal Access Token."),
-    expires_in_days: Optional[int] = typer.Option(30, "--expires", "-x", help="Expiration time in days. Use 0 or null for no expiration."),
+    expires_in_days: Optional[int] = typer.Option(30, "--expires", "-x", help="Expiration time in days. Use 0 for no expiration."),
+    scopes: Optional[list[str]] = typer.Option(None, "--scope", "-s", help="Optional API scopes to restrict this token (repeatable)."),
     profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Authentication profile name."),
     env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
     client: httpx.Client = None,  # type: ignore
@@ -481,6 +507,8 @@ def pat_create(
         payload["expires_in_days"] = expires_in_days
     else:
         payload["expires_in_days"] = None
+    if scopes:
+        payload["api_scopes"] = list(scopes)
 
     res = client.post("/auth/pats", json=payload)
     if res.status_code == 200:

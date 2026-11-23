@@ -1,119 +1,183 @@
-import typer
 import json
-from typing import Optional, List
+from pathlib import Path
+from typing import List, Optional
+
+import httpx
+import typer
 from rich.console import Console
 from valstorm import ValstormClient, ValstormError
-from .auth import ValstormAuth, requires_auth
+
+from .auth import requires_auth
 
 console = Console()
-record_app = typer.Typer(help="Manage records", no_args_is_help=True)
+record_app = typer.Typer(help="Manage Valstorm records (get, create, update, delete, restore).")
 
-LOOKUP_SUMMARY_KEYS = {"id", "name", "label", "schema", "schema_api_name", "schema_title", "_id"}
 
-def unpack_hydrated_lookups(data):
+def unpack_hydrated_lookups(obj):
     """
-    Recursively unpacks hydrated lookup dictionaries {'id': '...'} into raw ID strings.
-    Leaves non-lookup dictionaries intact.
+    Recursively converts hydrated lookup objects ({'id': '...', 'name': '...'})
+    back into plain string IDs, preserving data integrity on writes.
     """
-    if isinstance(data, dict):
-        if "id" in data and isinstance(data["id"], str) and set(data.keys()).issubset(LOOKUP_SUMMARY_KEYS):
-            return data["id"]
-        return {k: unpack_hydrated_lookups(v) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [unpack_hydrated_lookups(item) for item in data]
-    return data
+    if isinstance(obj, list):
+        return [unpack_hydrated_lookups(item) for item in obj]
+    if isinstance(obj, dict):
+        keys = set(obj.keys())
+        if "id" in keys and keys.issubset({"id", "name", "api_name", "schema_api_name"}):
+            return obj["id"]
+        return {k: unpack_hydrated_lookups(v) for k, v in obj.items()}
+    return obj
 
-def load_data(data: Optional[str], file: Optional[str]) -> List[dict]:
+
+def load_data(data: Optional[str], file: Optional[str]):
     if file:
+        p = Path(file)
+        if not p.exists():
+            console.print(f"[bold red]Error:[/bold red] File '{file}' not found.")
+            raise typer.Exit(1)
         try:
-            with open(file, 'r') as f:
-                content = json.load(f)
-                loaded = content if isinstance(content, list) else [content]
-                return unpack_hydrated_lookups(loaded)
-        except Exception as e:
-            console.print(f"[bold red]Failed to read file:[/bold red] {e}")
+            parsed = json.loads(p.read_text())
+        except json.JSONDecodeError as e:
+            console.print(f"[bold red]Invalid JSON in file '{file}':[/bold red] {e}")
             raise typer.Exit(1)
     elif data:
         try:
-            content = json.loads(data)
-            loaded = content if isinstance(content, list) else [content]
-            return unpack_hydrated_lookups(loaded)
-        except Exception as e:
-            console.print(f"[bold red]Failed to parse data JSON:[/bold red] {e}")
+            parsed = json.loads(data)
+        except json.JSONDecodeError as e:
+            console.print(f"[bold red]Invalid JSON in --data:[/bold red] {e}")
             raise typer.Exit(1)
     else:
-        console.print("[bold red]Must provide either --data or --file.[/bold red]")
+        console.print("[bold red]Error:[/bold red] Must provide either --data or --file.")
         raise typer.Exit(1)
 
-@record_app.command(name="create")
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    elif not isinstance(parsed, list):
+        console.print("[bold red]Error:[/bold red] Payload must be a JSON object or an array of JSON objects.")
+        raise typer.Exit(1)
+
+    return [unpack_hydrated_lookups(item) for item in parsed]
+
+
+@record_app.command("get")
+@requires_auth
+def get_record(
+    object_api_name: str = typer.Argument(..., help="The API name of the object (e.g., contact, ticket)."),
+    record_id: str = typer.Argument(..., help="The record ID to fetch."),
+    hydrate: bool = typer.Option(
+        False,
+        "--hydrate",
+        help="Hydrate lookup fields into {id, name} objects (default: off, returning raw string IDs).",
+    ),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
+    client: httpx.Client = None,  # type: ignore
+):
+    """
+    Fetch a single record by ID. Returns raw lookup IDs by default unless `--hydrate` is passed.
+    """
+    res = client.get(f"/object/{object_api_name}/{record_id}", params={"hydrate": str(hydrate).lower()})
+    if res.status_code != 200:
+        console.print(f"[bold red]Failed to fetch record ({res.status_code}):[/bold red] {res.text}")
+        raise typer.Exit(1)
+    print(json.dumps(res.json(), indent=2))
+
+
+@record_app.command("create")
 @requires_auth
 def create_record(
-    schema_api_name: str = typer.Argument(..., help="The API name of the schema/object."),
-    data: Optional[str] = typer.Option(None, "--data", help="JSON string of record data."),
-    file: Optional[str] = typer.Option(None, "--file", help="JSON file containing record data."),
-    profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
-    env: str = typer.Option(None, "--env", "-e", help="Target environment."),
-    sdk: ValstormClient = None  # type: ignore
+    object_api_name: str = typer.Argument(..., help="The API name of the object (e.g., contact, ticket)."),
+    data: Optional[str] = typer.Option(None, "--data", "-d", help="JSON string of the record (or array of records) to create."),
+    file: Optional[str] = typer.Option(None, "--file", "-f", help="Path to a JSON file containing record(s) to create."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
+    sdk: ValstormClient = None,  # type: ignore
 ):
-    """Create one or multiple records."""
+    """
+    Create one or more records in Valstorm.
+    """
     payload = load_data(data, file)
     try:
-        created = sdk.records.create(schema_api_name, payload)
-        console.print("[green]✓ Successfully created record(s).[/green]")
-        console.print_json(data=created)
+        res_data = sdk.records.create(object_api_name, payload)
+        print(json.dumps(res_data, indent=2))
     except ValstormError as e:
         console.print(f"[bold red]Failed to create record(s):[/bold red] {e}")
         raise typer.Exit(1)
 
-@record_app.command(name="update")
+
+@record_app.command("update")
 @requires_auth
 def update_record(
-    schema_api_name: str = typer.Argument(..., help="The API name of the schema/object."),
-    data: Optional[str] = typer.Option(None, "--data", help="JSON string of update data (must include 'id')."),
-    file: Optional[str] = typer.Option(None, "--file", help="JSON file containing update data."),
-    profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
-    env: str = typer.Option(None, "--env", "-e", help="Target environment."),
-    sdk: ValstormClient = None  # type: ignore
+    object_api_name: str = typer.Argument(..., help="The API name of the object (e.g., contact, ticket)."),
+    record_id: Optional[str] = typer.Option(None, "--id", help="The ID of the record to update (if not present in JSON data)."),
+    data: Optional[str] = typer.Option(None, "--data", "-d", help="JSON string of the record(s) to update."),
+    file: Optional[str] = typer.Option(None, "--file", "-f", help="Path to a JSON file containing record(s) to update."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
+    sdk: ValstormClient = None,  # type: ignore
 ):
-    """Update existing records."""
+    """
+    Update one or more records in Valstorm.
+    """
     payload = load_data(data, file)
+    if record_id:
+        for item in payload:
+            if isinstance(item, dict) and "id" not in item:
+                item["id"] = record_id
+
+    for item in payload:
+        if isinstance(item, dict) and "id" not in item:
+            console.print("[bold red]Error:[/bold red] All records in an update payload must include an 'id' field (or pass --id).")
+            raise typer.Exit(1)
+
     try:
-        updated = sdk.records.update(schema_api_name, payload)
-        console.print("[green]✓ Successfully updated record(s).[/green]")
-        console.print_json(data=updated)
+        res_data = sdk.records.update(object_api_name, payload)
+        print(json.dumps(res_data, indent=2))
     except ValstormError as e:
         console.print(f"[bold red]Failed to update record(s):[/bold red] {e}")
         raise typer.Exit(1)
 
-@record_app.command(name="delete")
+
+@record_app.command("delete")
 @requires_auth
 def delete_record(
-    schema_api_name: str = typer.Argument(..., help="The API name of the schema/object."),
-    id: Optional[List[str]] = typer.Option(None, "--id", help="Record ID to delete (can be specified multiple times)."),
-    file: Optional[str] = typer.Option(None, "--file", help="JSON file containing array of IDs."),
-    profile: str = typer.Option(None, "--profile", "-p", help="Profile name."),
-    env: str = typer.Option(None, "--env", "-e", help="Target environment."),
-    sdk: ValstormClient = None  # type: ignore
+    object_api_name: str = typer.Argument(..., help="The API name of the object (e.g., contact, ticket)."),
+    ids: List[str] = typer.Argument(..., help="One or more record IDs to soft-delete."),
+    force: bool = typer.Option(False, "--force", "-y", help="Skip confirmation prompt."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
+    sdk: ValstormClient = None,  # type: ignore
 ):
-    """Delete records."""
-    ids_to_delete = []
-    if file:
-        try:
-            with open(file, 'r') as f:
-                content = json.load(f)
-                ids_to_delete = content if isinstance(content, list) else [content]
-        except Exception as e:
-            console.print(f"[bold red]Failed to read file:[/bold red] {e}")
-            raise typer.Exit(1)
-    elif id:
-        ids_to_delete = id
-    else:
-        console.print("[bold red]Must provide either --id or --file.[/bold red]")
-        raise typer.Exit(1)
+    """
+    Soft-delete one or more records by ID.
+    """
+    if not force:
+        confirm = typer.confirm(f"Are you sure you want to delete {len(ids)} record(s) from '{object_api_name}'?")
+        if not confirm:
+            console.print("Operation cancelled.")
+            raise typer.Exit(0)
 
     try:
-        deleted_count = sdk.records.delete(schema_api_name, ids_to_delete)
-        console.print(f"[green]✓ Successfully deleted {deleted_count} record(s).[/green]")
+        sdk.records.delete(object_api_name, ids)
+        console.print(f"[green]✓ Successfully deleted {len(ids)} record(s).[/green]")
     except ValstormError as e:
         console.print(f"[bold red]Failed to delete record(s):[/bold red] {e}")
         raise typer.Exit(1)
+
+
+@record_app.command("restore")
+@requires_auth
+def restore_record(
+    object_api_name: str = typer.Argument(..., help="The API name of the object (e.g., contact, ticket)."),
+    ids: List[str] = typer.Argument(..., help="One or more soft-deleted record IDs to restore."),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
+    env: Optional[str] = typer.Option(None, "--env", "-e", help="Target environment."),
+    client: httpx.Client = None,  # type: ignore
+):
+    """
+    Restore one or more soft-deleted records from the recycle bin.
+    """
+    res = client.post(f"/object/{object_api_name}/undelete", json={"ids": ids})
+    if res.status_code not in (200, 201):
+        console.print(f"[bold red]Failed to restore record(s) ({res.status_code}):[/bold red] {res.text}")
+        raise typer.Exit(1)
+    console.print(f"[green]✓ Restored {len(ids)} record(s) in '{object_api_name}'.[/green]")

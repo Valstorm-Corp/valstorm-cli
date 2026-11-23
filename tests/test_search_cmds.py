@@ -210,23 +210,6 @@ def test_search_no_results(mock_auth_cls):
 
 
 @patch("valstorm_cli.search_cmds.ValstormAuth")
-def test_vfs_search_alias(mock_auth_cls):
-    mock_auth = MagicMock()
-    mock_auth.access_token = "valid_token"
-    mock_client = MagicMock()
-    mock_auth.get_client.return_value = mock_client
-    mock_auth_cls.return_value = mock_auth
-
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"results": [], "count": 0, "execution_time_ms": 10.0}
-    mock_client.post.return_value = mock_resp
-
-    result = runner.invoke(app, ["vfs", "search", "test"])
-    assert result.exit_code == 0
-
-
-@patch("valstorm_cli.search_cmds.ValstormAuth")
 def test_ask_json_output(mock_auth_cls):
     mock_auth = MagicMock()
     mock_auth.access_token = "valid_token"
@@ -281,23 +264,6 @@ def test_ask_raw_mode(mock_stream_events, mock_auth_cls):
     assert "Hello world!" in result.output
 
 
-@patch("valstorm_cli.search_cmds.ValstormAuth")
-@patch("valstorm_cli.search_cmds.stream_search_events")
-def test_vfs_ask_alias(mock_stream_events, mock_auth_cls):
-    mock_auth = MagicMock()
-    mock_auth.access_token = "valid_token"
-    mock_auth_cls.return_value = mock_auth
-
-    async def fake_generator(*args, **kwargs):
-        yield {"event": "ai_chunk", "data": {"delta": "VFS Answer"}}
-
-    mock_stream_events.side_effect = fake_generator
-
-    result = runner.invoke(app, ["vfs", "ask", "Question?", "--raw"])
-    assert result.exit_code == 0
-    assert "VFS Answer" in result.output
-
-
 def test_render_citations_table():
     citations = [
         {
@@ -340,19 +306,19 @@ async def test_parse_sse_stream():
 
 
 @patch("valstorm_cli.auth.get_auth")
-def test_vfs_reindex_requires_vault_or_all(mock_get_auth):
+def test_vfs_index_requires_target_vault_or_all(mock_get_auth):
     mock_auth = MagicMock()
     mock_auth.access_token = "valid_token"
     mock_auth.sandbox = None
     mock_get_auth.return_value = mock_auth
 
-    result = runner.invoke(app, ["vfs", "reindex"])
+    result = runner.invoke(app, ["vfs", "index"])
     assert result.exit_code == 1
-    assert "Must specify either --vault" in result.output
+    assert "Specify a `file_id`, `--vault <id>`, or `--all`" in result.output
 
 
 @patch("valstorm_cli.auth.get_auth")
-def test_vfs_reindex_with_all(mock_get_auth):
+def test_vfs_index_with_all(mock_get_auth):
     mock_auth = MagicMock()
     mock_auth.access_token = "valid_token"
     mock_auth.sandbox = None
@@ -365,7 +331,7 @@ def test_vfs_reindex_with_all(mock_get_auth):
     mock_resp.json.return_value = {"status": "dispatched", "total_files_queued": 42}
     mock_client.post.return_value = mock_resp
 
-    result = runner.invoke(app, ["vfs", "reindex", "--all", "--json"])
+    result = runner.invoke(app, ["vfs", "index", "--all", "--json"])
     assert result.exit_code == 0
     parsed = json.loads(result.output)
     assert parsed["total_files_queued"] == 42

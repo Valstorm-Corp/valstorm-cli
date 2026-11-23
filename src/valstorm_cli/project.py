@@ -6,7 +6,7 @@ import webbrowser
 import httpx
 from pathlib import Path
 from rich.console import Console
-from .auth import get_auth, get_web_url, get_project_root, load_config, requires_auth, ValstormAuth
+from .auth import get_project_root, load_config, requires_auth, ValstormAuth
 
 console = Console()
 project_app = typer.Typer(help="Manage local workspace settings and stubs.")
@@ -206,10 +206,7 @@ def open_browser(
     exchange_code = res.json()["exchange_code"]
 
     # 2. Build Web URL
-    base_web_url = get_web_url(auth.env)
-    # Remove trailing slash if present
-    if base_web_url.endswith("/"):
-        base_web_url = base_web_url[:-1]
+    base_web_url = auth.web_base_url.rstrip("/")
 
     target_url = f"{base_web_url}/cli-login?code={exchange_code}"
 
